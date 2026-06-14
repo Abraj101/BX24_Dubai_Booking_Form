@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dubai Booking Form — Setup</title>
+    <script src="https://api.bitrix24.com/api/v1/"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            font-size: 14px; background: #f4f7f6;
+            display: flex; align-items: center; justify-content: center; min-height: 100vh;
+        }
+        .setup-card {
+            background: #fff; padding: 30px; border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            max-width: 480px; width: 100%; text-align: center;
+        }
+        h2 { color: #3d5a4f; font-size: 18px; margin-bottom: 12px; }
+        p { color: #7f8c8d; line-height: 1.5; margin-bottom: 24px; }
+        .btn {
+            background: #3d5a4f; color: #fff; padding: 12px 24px;
+            border: none; border-radius: 4px; font-weight: 700;
+            cursor: pointer; font-size: 14px; width: 100%; transition: background 0.15s;
+        }
+        .btn:hover { background: #2f4940; }
+        .btn:disabled { background: #9bb0a7; cursor: not-allowed; }
+        .status-log {
+            margin-top: 15px; font-size: 12px; color: #7f8c8d;
+            text-align: left; background: #f8fafc; padding: 10px;
+            border-radius: 4px; border: 1px solid #e2e8f0; display: none; line-height: 1.8;
+        }
+    </style>
+</head>
+<body>
+<div class="setup-card">
+    <h2>Dubai Booking Form — Setup</h2>
+    <p>Registers the <strong>Dubai Booking Form</strong> tab inside your CRM Deal view.</p>
+    <button class="btn" id="activateBtn" onclick="activate()">Activate Dubai Booking Form Tab</button>
+    <div class="status-log" id="statusLog"></div>
+</div>
+
+<script>
+function log(msg) {
+    const box = document.getElementById('statusLog');
+    box.style.display = 'block';
+    box.innerHTML += msg + '<br>';
+}
+
+function activate() {
+    const btn = document.getElementById('activateBtn');
+    btn.disabled = true;
+    btn.textContent = 'Registering...';
+    document.getElementById('statusLog').innerHTML = '';
+    log("Initialising BX24 context...");
+
+    BX24.init(function() {
+        log("BX24 ready. Binding tab placement...");
+        const handlerUrl = window.location.origin + '/bookingform.html';
+
+        BX24.callMethod('placement.bind', {
+            PLACEMENT:   'CRM_DEAL_DETAIL_TAB',
+            HANDLER:     handlerUrl,
+            TITLE:       'Dubai Booking Form',
+            DESCRIPTION: 'Generate the South Lofts Dubai booking form'
+        }, function(result) {
+            if (result.error()) {
+                const err = result.error().toString();
+                const lc  = err.toLowerCase();
+                if (lc.indexOf('already') !== -1 || lc.indexOf('binded') !== -1) {
+                    log("<span style='color:#2e7d32;font-weight:bold'>\u2713 Tab already active \u2014 completing install\u2026</span>");
+                    finishInstall();
+                } else {
+                    log("<span style='color:#c62828;font-weight:bold'>\u2717 Error: " + err + "</span>");
+                    log("Ensure <b>placement</b> scope is added to this Local App.");
+                    btn.disabled = false;
+                    btn.textContent = 'Retry';
+                }
+            } else {
+                log("<span style='color:#2e7d32;font-weight:bold'>\u2713 Dubai Booking Form tab registered!</span>");
+                finishInstall();
+            }
+        });
+    });
+}
+
+function finishInstall() {
+    try { if (BX24.installFinish) BX24.installFinish(); } catch (e) {}
+    log("Open any Deal \u2192 <b>Dubai Booking Form</b> tab. You can close this window.");
+}
+
+BX24.init(function() {
+    if (BX24.isInstallMode && BX24.isInstallMode()) activate();
+});
+</script>
+</body>
+</html>
