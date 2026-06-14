@@ -478,9 +478,10 @@ function baseSchedule(plan, pj, booking, netPayable) {
     if (SCHEDULES[plan]) {
         return SCHEDULES[plan].map(function(it) {
             const isCompletion = it.when.type === 'completion';
+            const d = dateFor(it.when);
             return { label: it.label, pct: it.pct,
                      amount: round2(netPayable * it.pct / 100),
-                     dateStr: fmtDate(dateFor(it.when)),
+                     dateStr: fmtDate(d), ts: d.getTime(),
                      // Downpayment + Completion are paid in full (never reduced by balloons)
                      locked: (it.label === 'Downpayment' || isCompletion),
                      instNo: parseInstNo(it.label) };
@@ -488,8 +489,10 @@ function baseSchedule(plan, pj, booking, netPayable) {
     }
     if (plan === 'full_payment') {
         const d = pj.paymentDate ? new Date(pj.paymentDate) : booking;
+        const ok = !isNaN(d.getTime());
         return [{ label: 'Full Payment', pct: 100, amount: netPayable,
-                  dateStr: isNaN(d.getTime()) ? fmtDate(booking) : fmtDate(d), locked: true, instNo: null }];
+                  dateStr: ok ? fmtDate(d) : fmtDate(booking), ts: ok ? d.getTime() : booking.getTime(),
+                  locked: true, instNo: null }];
     }
     if (plan === 'custom') return buildCustomSchedule(pj, netPayable);
     // unknown plan: leave empty (table shows a note)
@@ -508,27 +511,36 @@ function buildCustomSchedule(pj, net) {
 
     const rows = [];
     rows.push({ label: 'Downpayment', pct: round2(dp),
-                amount: round2(net * dp / 100), dateStr: fmtDate(dpDate),
+                amount: round2(net * dp / 100), dateStr: fmtDate(dpDate), ts: dpDate.getTime(),
                 locked: true, instNo: null });
 
     const instPctTotal = Math.max(0, 100 - dp - pos);
     const each = n > 0 ? instPctTotal / n : 0;
     for (let i = 1; i <= n; i++) {
+        const d = addMonths(dpDate, i * freqMonths);
         rows.push({ label: ordinal(i) + ' Installment', pct: round2(each),
                     amount: round2(net * each / 100),
-                    dateStr: fmtDate(addMonths(dpDate, i * freqMonths)),
+                    dateStr: fmtDate(d), ts: d.getTime(),
                     locked: false, instNo: i });
     }
     rows.push({ label: 'On Possession', pct: round2(pos),
                 amount: round2(net * pos / 100),
                 dateStr: posDate ? fmtDate(posDate) : '\u2014',
+                ts: posDate ? posDate.getTime() : Number.MAX_SAFE_INTEGER,
                 locked: true, instNo: null });
     return rows;
 }
 
-/* Wrap the base schedule and apply balloon payments */
+/* Wrap the base schedule, apply balloons, then order rows by payment date */
 function buildSchedule(plan, pj, booking, net) {
-    return applyBalloons(baseSchedule(plan, pj, booking, net), pj);
+    const rows = applyBalloons(baseSchedule(plan, pj, booking, net), pj);
+    return rows
+        .map(function(r, i) { r._i = i; return r; })
+        .sort(function(a, b) {
+            const ta = (a.ts == null ? Number.MAX_SAFE_INTEGER : a.ts);
+            const tb = (b.ts == null ? Number.MAX_SAFE_INTEGER : b.ts);
+            return (ta - tb) || (a._i - b._i);   // date asc; stable on ties
+        });
 }
 
 // Balloons reduce the non-locked installment pool proportionally (per plan %),
@@ -547,22 +559,22 @@ function applyBalloons(rows, pj) {
         rows.forEach(function(r) { if (!r.locked) r.amount = round2(r.amount * scale); });
     }
 
-    function brow(b, dateStr) {
+    function brow(b, dateStr, ts) {
         return { label: 'Balloon Payment', pct: '', amount: round2(b.amount),
-                 dateStr: dateStr, locked: true, instNo: null, balloon: true };
+                 dateStr: dateStr, ts: ts, locked: true, instNo: null, balloon: true };
     }
 
     const matched = {};
     rows.forEach(function(r) { if (r.instNo != null) matched[r.instNo] = true; });
 
     const out = [];
-    let lastInstDate = '';
+    let lastInstDate = '', lastInstTs = null;
     rows.forEach(function(r) {
         out.push(r);
         if (r.instNo != null) {
-            lastInstDate = r.dateStr;
+            lastInstDate = r.dateStr; lastInstTs = r.ts;
             balloons.filter(function(b) { return b.position === r.instNo; })
-                    .forEach(function(b) { out.push(brow(b, r.dateStr)); });
+                    .forEach(function(b) { out.push(brow(b, r.dateStr, (r.ts || 0) + 1)); });
         }
     });
     // positions that didn't match any installment -> append after the last installment
@@ -570,7 +582,7 @@ function applyBalloons(rows, pj) {
             .forEach(function(b) {
                 let idx = -1;
                 out.forEach(function(r, i) { if (r.instNo != null) idx = i; });
-                out.splice(idx >= 0 ? idx + 1 : out.length, 0, brow(b, lastInstDate));
+                out.splice(idx >= 0 ? idx + 1 : out.length, 0, brow(b, lastInstDate, (lastInstTs || 0) + 1));
             });
     return out;
 }
