@@ -65,6 +65,7 @@
     table.ip-table td.c { text-align: center; }
     table.ip-table td.r { text-align: right; }
     table.ip-table tr.total td { font-weight: 800; background: #f3f5f4; }
+    table.ip-table tr.balloon-row td { font-style: italic; background: #f7faf8; }
 
     ol.tnc { margin: 8px 0 0 18px; padding: 0; }
     ol.tnc li { font-size: 10px; line-height: 1.55; margin-bottom: 7px; text-align: justify; }
@@ -123,12 +124,11 @@ const C_COUNTRY     = 'UF_CRM_1781458379196';
 const C_INCORP      = 'UF_CRM_1781458599043';
 
 // Product (catalog) property IDs
-const PROD_TYPE  = 'property177';   // Unit Type
-const PROD_SQFT  = 'property259';   // Total SqFt
-const PROD_FLOOR = 'property261';   // Floor
-const PLAN_PRICE_PROP = {           // plan -> price property
-    '60_40': 'property263', '3_years': 'property265',
-    '5_years': 'property267', 'full_payment': 'property269'
+const PROD_TYPE  = 177;   // Unit Type
+const PROD_SQFT  = 259;   // Total SqFt
+const PROD_FLOOR = 261;   // Floor
+const PLAN_PRICE_PROP = {  // plan -> price property id (fallback only)
+    '60_40': 263, '3_years': 265, '5_years': 267, 'full_payment': 269
 };
 
 // Static project details (same for every South Lofts deal)
@@ -278,16 +278,27 @@ function getUF(obj, code) {
     if (v && typeof v === 'object') v = (v.value !== undefined ? v.value : v.VALUE);
     return (v === undefined || v === null) ? '' : v;
 }
-// Catalog property value (handles {value, valueEnum})
-function getProp(product, key) {
-    let v = product[key];
-    if (Array.isArray(v)) v = v[0];
-    if (v && typeof v === 'object') {
-        if (v.valueEnum) return v.valueEnum;
-        return (v.value !== undefined ? v.value : v.VALUE);
+// Catalog property value (tolerant of key format; handles {value, valueEnum})
+function getProp(product, id) {
+    if (!product) return '';
+    const keys = ['property' + id, 'property_' + id, 'PROPERTY_' + id, String(id)];
+    for (let i = 0; i < keys.length; i++) {
+        let v = product[keys[i]];
+        if (v === undefined || v === null) continue;
+        if (Array.isArray(v)) v = v[0];
+        if (v && typeof v === 'object') {
+            if (v.valueEnum) return v.valueEnum;
+            return (v.value !== undefined ? v.value : v.VALUE);
+        }
+        return v;
     }
-    return (v === undefined || v === null) ? '' : v;
+    return '';
 }
+function ordinal(n) {
+    const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+function round2(n) { return Math.round(n * 100) / 100; }
 
 /* ════════════════ LOAD ════════════════ */
 function setStatus(msg, err) {
@@ -332,9 +343,12 @@ async function loadAll() {
             if (pid) {
                 const pd = await callBX('catalog.product.get', { id: pid });
                 product = (pd && pd.product) ? pd.product : pd;
+                console.log('[BookingForm] product', pid, product);
+                console.log('[BookingForm] Type/Area/Floor =',
+                    getProp(product, PROD_TYPE), '/', getProp(product, PROD_SQFT), '/', getProp(product, PROD_FLOOR));
             }
         }
-    } catch (e) { console.warn('[BookingForm] product load:', e); }
+    } catch (e) { console.warn('[BookingForm] product load failed (check catalog scope on this app):', e); }
 
     // 5) Assemble + render
     const data = buildData(deal, pj, plan, contacts, product);
@@ -400,18 +414,22 @@ function contactToPurchaser(c) {
 /* ════════════════ BUILD DATA ════════════════ */
 function buildData(deal, pj, plan, contacts, product) {
     const today = new Date();
+    const discPct = toNumber(pj.discountPct);
 
-    // Purchase price
-    let purchasePrice = 0;
-    if (plan === 'custom') {
-        purchasePrice = toNumber(pj.totalAmount);
-    } else if (product && PLAN_PRICE_PROP[plan]) {
-        purchasePrice = toNumber(getProp(product, PLAN_PRICE_PROP[plan]));
+    // Net payable = the deal Amount (Amount and Currency); already discounted by Payment Details
+    let netPayable = toNumber(deal.OPPORTUNITY);
+    if (!netPayable) {
+        // Fallback if the deal Amount hasn't been calculated yet
+        let gross = 0;
+        if (plan === 'custom') gross = toNumber(pj.totalAmount);
+        else if (product && PLAN_PRICE_PROP[plan]) gross = toNumber(getProp(product, PLAN_PRICE_PROP[plan]));
+        netPayable = gross * (1 - discPct / 100);
     }
-
-    const discPct   = toNumber(pj.discountPct);
-    const discValue = purchasePrice * discPct / 100;
-    const netPayable = purchasePrice - discValue;
+    // Back-compute the gross purchase price from net + discount
+    const purchasePrice = (discPct > 0 && discPct < 100)
+        ? round2(netPayable / (1 - discPct / 100))
+        : netPayable;
+    const discValue = round2(purchasePrice - netPayable);
     const dldFee = purchasePrice * DLD_RATE;
 
     // Schedule
@@ -444,7 +462,12 @@ function buildData(deal, pj, plan, contacts, product) {
     };
 }
 
-function buildSchedule(plan, pj, booking, netPayable) {
+function parseInstNo(label) {
+    const m = String(label).match(/^(\d+)(st|nd|rd|th)\s+Installment/i);
+    return m ? parseInt(m[1], 10) : null;
+}
+
+function baseSchedule(plan, pj, booking, netPayable) {
     const completion = addMonths(booking, HANDOVER_MONTHS);
     function dateFor(when) {
         if (when.type === 'booking')    return addMonths(booking, when.months);
@@ -454,18 +477,102 @@ function buildSchedule(plan, pj, booking, netPayable) {
     }
     if (SCHEDULES[plan]) {
         return SCHEDULES[plan].map(function(it) {
+            const isCompletion = it.when.type === 'completion';
             return { label: it.label, pct: it.pct,
-                     amount: Math.round(netPayable * it.pct / 100 * 100) / 100,
-                     dateStr: fmtDate(dateFor(it.when)) };
+                     amount: round2(netPayable * it.pct / 100),
+                     dateStr: fmtDate(dateFor(it.when)),
+                     // Downpayment + Completion are paid in full (never reduced by balloons)
+                     locked: (it.label === 'Downpayment' || isCompletion),
+                     instNo: parseInstNo(it.label) };
         });
     }
     if (plan === 'full_payment') {
         const d = pj.paymentDate ? new Date(pj.paymentDate) : booking;
         return [{ label: 'Full Payment', pct: 100, amount: netPayable,
-                  dateStr: isNaN(d.getTime()) ? fmtDate(booking) : fmtDate(d) }];
+                  dateStr: isNaN(d.getTime()) ? fmtDate(booking) : fmtDate(d), locked: true, instNo: null }];
     }
-    // custom / unknown: schedule criteria pending — leave empty (table shows a note)
+    if (plan === 'custom') return buildCustomSchedule(pj, netPayable);
+    // unknown plan: leave empty (table shows a note)
     return [];
+}
+
+// Custom schedule from the stored custom fields:
+// Downpayment % + N installments (remaining %, split, at chosen frequency) + On Possession %
+function buildCustomSchedule(pj, net) {
+    const dp  = toNumber(pj.downpaymentPct);
+    const pos = toNumber(pj.possessionPct);
+    const n   = Math.max(0, parseInt(pj.paymentPlanUnits, 10) || 0);
+    const freqMonths = ({ monthly: 1, quarterly: 3, biannually: 6, annually: 12 })[pj.innerPaymentPlan] || 1;
+    const dpDate  = pj.downpaymentDate ? new Date(pj.downpaymentDate) : new Date();
+    const posDate = pj.possessionDate ? new Date(pj.possessionDate) : null;
+
+    const rows = [];
+    rows.push({ label: 'Downpayment', pct: round2(dp),
+                amount: round2(net * dp / 100), dateStr: fmtDate(dpDate),
+                locked: true, instNo: null });
+
+    const instPctTotal = Math.max(0, 100 - dp - pos);
+    const each = n > 0 ? instPctTotal / n : 0;
+    for (let i = 1; i <= n; i++) {
+        rows.push({ label: ordinal(i) + ' Installment', pct: round2(each),
+                    amount: round2(net * each / 100),
+                    dateStr: fmtDate(addMonths(dpDate, i * freqMonths)),
+                    locked: false, instNo: i });
+    }
+    rows.push({ label: 'On Possession', pct: round2(pos),
+                amount: round2(net * pos / 100),
+                dateStr: posDate ? fmtDate(posDate) : '\u2014',
+                locked: true, instNo: null });
+    return rows;
+}
+
+/* Wrap the base schedule and apply balloon payments */
+function buildSchedule(plan, pj, booking, net) {
+    return applyBalloons(baseSchedule(plan, pj, booking, net), pj);
+}
+
+// Balloons reduce the non-locked installment pool proportionally (per plan %),
+// then appear as their own row (no %) after the installment at their position.
+function applyBalloons(rows, pj) {
+    const balloons = (Array.isArray(pj.balloonPayments) ? pj.balloonPayments : [])
+        .map(function(b) { return { position: parseInt(b.position, 10), amount: toNumber(b.amount) }; })
+        .filter(function(b) { return b.amount > 0; });
+    if (!balloons.length) return rows;
+
+    const poolBase     = rows.reduce(function(a, r) { return a + (r.locked ? 0 : r.amount); }, 0);
+    const balloonTotal = balloons.reduce(function(a, b) { return a + b.amount; }, 0);
+
+    if (poolBase > 0) {
+        const scale = Math.max(0, poolBase - balloonTotal) / poolBase;
+        rows.forEach(function(r) { if (!r.locked) r.amount = round2(r.amount * scale); });
+    }
+
+    function brow(b, dateStr) {
+        return { label: 'Balloon Payment', pct: '', amount: round2(b.amount),
+                 dateStr: dateStr, locked: true, instNo: null, balloon: true };
+    }
+
+    const matched = {};
+    rows.forEach(function(r) { if (r.instNo != null) matched[r.instNo] = true; });
+
+    const out = [];
+    let lastInstDate = '';
+    rows.forEach(function(r) {
+        out.push(r);
+        if (r.instNo != null) {
+            lastInstDate = r.dateStr;
+            balloons.filter(function(b) { return b.position === r.instNo; })
+                    .forEach(function(b) { out.push(brow(b, r.dateStr)); });
+        }
+    });
+    // positions that didn't match any installment -> append after the last installment
+    balloons.filter(function(b) { return !matched[b.position]; })
+            .forEach(function(b) {
+                let idx = -1;
+                out.forEach(function(r, i) { if (r.instNo != null) idx = i; });
+                out.splice(idx >= 0 ? idx + 1 : out.length, 0, brow(b, lastInstDate));
+            });
+    return out;
 }
 
 /* ════════════════ RENDER ════════════════ */
@@ -502,9 +609,11 @@ function scheduleHtml(d) {
         rows = '<tr><td colspan="4" class="c">Installment schedule for this plan is not configured yet.</td></tr>';
     } else {
         d.schedule.forEach(function(r) {
-            rows += '<tr>' +
+            const pctCell = (r.pct === '' || r.pct == null) ? '' : (r.pct + '%');
+            const cls = r.balloon ? ' class="balloon-row"' : '';
+            rows += '<tr' + cls + '>' +
                 '<td>' + esc(r.label) + '</td>' +
-                '<td class="c">' + (r.pct === 'Flat' ? 'Flat Fee' : r.pct + '%') + '</td>' +
+                '<td class="c">' + pctCell + '</td>' +
                 '<td class="r">' + money(r.amount) + '</td>' +
                 '<td class="c">' + esc(r.dateStr) + '</td>' +
             '</tr>';
@@ -549,7 +658,7 @@ function renderForm(d) {
         '<div class="row"><b>Location:</b> ' + esc(LOCATION) + '</div>' +
         '<div class="row"><b>Total Area:</b> ' + esc(val(d.totalArea)) + '</div>' +
         '<div class="row"><b>Building / Phase:</b> ' + esc(BUILDING) + '</div>' +
-        '<div class="row"><b>Purchase Price:</b> ' + money(d.purchasePrice) + '</div>' +
+        '<div class="row"><b>Purchase Price:</b> ' + money(d.netPayable) + '</div>' +
         '<div class="row"><b>Unit:</b> ' + esc(val(d.unit)) + '</div>' +
         '<div class="row"><b>First Instalment Payment (\u201CDeposit\u201D):</b> ' + money(d.deposit) + '</div>' +
       '</div>' +
