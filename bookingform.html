@@ -126,10 +126,11 @@ const C_UAE_RESIDENT = 'UF_CRM_1781640051215';      // dropdown: Yes (1289) / No
 const UAE_RESIDENT_MAP = { '1289': 'Yes', '1291': 'No' };
 
 // Company (when the purchaser is a company, not individuals)
+const CO_ADDRESS      = 'UF_CRM_1781650941705';
 const CO_CITY         = 'UF_CRM_1781647920524';
 const CO_COUNTRY      = 'UF_CRM_1781647935480';
 const CO_AUTHORITY    = 'UF_CRM_1781647957582';
-const CO_LICENSE      = 'UF_CRM_1781647974806';
+const CO_LICENSE      = 'UF_CRM_1781650776919';
 const CO_LICENSE_EXP  = 'UF_CRM_1781647988565';
 const CO_REP          = 'UF_CRM_1781648029271';
 const CO_REP_PASSPORT = 'UF_CRM_1781648051323';
@@ -451,7 +452,7 @@ function companyToObj(co) {
     if (!co) return null;
     return {
         name:           co.TITLE || '',
-        address:        getUF(co, 'ADDRESS'),
+        address:        getUF(co, CO_ADDRESS),
         city:           getUF(co, CO_CITY),
         country:        getUF(co, CO_COUNTRY),
         mobile:         getMulti(co, 'PHONE'),
