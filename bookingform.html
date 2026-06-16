@@ -125,6 +125,16 @@ const C_INCORP      = 'UF_CRM_1781458599043';
 const C_UAE_RESIDENT = 'UF_CRM_1781640051215';      // dropdown: Yes (1289) / No (1291)
 const UAE_RESIDENT_MAP = { '1289': 'Yes', '1291': 'No' };
 
+// Company (when the purchaser is a company, not individuals)
+const CO_CITY         = 'UF_CRM_1781647920524';
+const CO_COUNTRY      = 'UF_CRM_1781647935480';
+const CO_AUTHORITY    = 'UF_CRM_1781647957582';
+const CO_LICENSE      = 'UF_CRM_1781647974806';
+const CO_LICENSE_EXP  = 'UF_CRM_1781647988565';
+const CO_REP          = 'UF_CRM_1781648029271';
+const CO_REP_PASSPORT = 'UF_CRM_1781648051323';
+const CO_REP_PASS_EXP = 'UF_CRM_1781648066813';
+
 // Product (catalog) property IDs
 const PROD_TYPE  = 177;   // Unit Type
 const PROD_SQFT  = 259;   // Total SqFt
@@ -259,6 +269,16 @@ function money(n) {
 }
 function pad(n) { return n < 10 ? '0' + n : '' + n; }
 function fmtDate(d) { return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(); }
+// Normalise a Bitrix date/datetime field value to dd/mm/yyyy; pass through anything else.
+function maybeDate(v) {
+    if (!v) return '';
+    const s = String(v);
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return m[3] + '/' + m[2] + '/' + m[1];
+    m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+    if (m) return m[1] + '/' + m[2] + '/' + m[3];
+    return s;
+}
 function addMonths(date, m) {
     const d = new Date(date.getTime());
     const day = d.getDate();
@@ -335,6 +355,16 @@ async function loadAll() {
     // 3) Contacts on the deal -> Purchaser 1 / Purchaser 2
     const contacts = await loadContacts();
 
+    // 3b) Company (when the purchaser is a company rather than individuals)
+    let company = null;
+    const companyId = deal.COMPANY_ID;
+    if (companyId && parseInt(companyId, 10) > 0) {
+        try {
+            const coRes = await callBX('crm.company.get', { id: companyId });
+            company = coRes.result ? coRes.result : coRes;
+        } catch (e) { console.warn('[BookingForm] company load failed:', e); }
+    }
+
     // 4) Product (unit) from the first product row
     let product = null;
     try {
@@ -354,7 +384,7 @@ async function loadAll() {
     } catch (e) { console.warn('[BookingForm] product load failed (check catalog scope on this app):', e); }
 
     // 5) Assemble + render
-    const data = buildData(deal, pj, plan, contacts, product);
+    const data = buildData(deal, pj, plan, contacts, product, company);
     renderForm(data);
     document.getElementById('attachBtn').disabled = false;
     setStatus('Ready — review, then Attach to Deal.');
@@ -417,7 +447,25 @@ function contactToPurchaser(c) {
 }
 
 /* ════════════════ BUILD DATA ════════════════ */
-function buildData(deal, pj, plan, contacts, product) {
+function companyToObj(co) {
+    if (!co) return null;
+    return {
+        name:           co.TITLE || '',
+        address:        getUF(co, 'ADDRESS'),
+        city:           getUF(co, CO_CITY),
+        country:        getUF(co, CO_COUNTRY),
+        mobile:         getMulti(co, 'PHONE'),
+        email:          getMulti(co, 'EMAIL'),
+        authority:      getUF(co, CO_AUTHORITY),
+        license:        getUF(co, CO_LICENSE),
+        licenseExp:     maybeDate(getUF(co, CO_LICENSE_EXP)),
+        representor:    getUF(co, CO_REP),
+        repPassport:    getUF(co, CO_REP_PASSPORT),
+        repPassportExp: maybeDate(getUF(co, CO_REP_PASS_EXP))
+    };
+}
+
+function buildData(deal, pj, plan, contacts, product, company) {
     const today = new Date();
     const discPct = toNumber(pj.discountPct);
 
@@ -459,6 +507,7 @@ function buildData(deal, pj, plan, contacts, product) {
         plan: plan, planLabel: PLAN_LABELS[plan] || plan || '\u2014',
         schedule: schedule,
         purchasers: contacts.map(contactToPurchaser),
+        company: companyToObj(company),
         agents: {
             assisted: getUF(deal, F_AGENT_ASSISTED),
             agencyName: getUF(deal, F_AGENCY_NAME),
@@ -662,8 +711,15 @@ function purchaserHtml(title, p) {
 }
 
 function purchaserSectionsHtml(d) {
-    var list = (d.purchasers && d.purchasers.length) ? d.purchasers : [null];
     var note = '<div class="note"><b>Note and Warning:</b> The above address/contact details are considered the Purchaser\u2019s primary address and chosen domicile and shall be printed on the Vendor\u2019s Sales and Purchase Agreement. Such contact details including email and mobile number shall be used i) for all communications/correspondences with the Purchaser and ii) to transact with the Vendor on digital channels like websites and applications. Sharing your contact details information and/or passwords with others may give them access to your personal information as well as the possibility to transact with the Vendor in your name and on your behalf.</div>';
+
+    // Company purchase: show the company block instead of individual purchasers
+    if (d.company) {
+        return '<div class="sec-title">Purchaser Information (Company)</div>' +
+               companyHtml('PURCHASER INFORMATION (COMPANY)', d.company) + note;
+    }
+
+    var list = (d.purchasers && d.purchasers.length) ? d.purchasers : [null];
     var html = '';
     list.forEach(function(p, i) {
         var n = i + 1;
@@ -672,6 +728,33 @@ function purchaserSectionsHtml(d) {
         if (i === 0) html += note;   // primary-address note under Purchaser 1 only
     });
     return html;
+}
+
+function companyHtml(title, c) {
+    if (!c) {
+        return '<div class="purchaser-box"><div class="col"><div class="pbox-head">' + title +
+               '</div><div class="pline">\u2014</div></div><div class="col"></div></div>';
+    }
+    return '' +
+    '<div class="purchaser-box avoid-break">' +
+      '<div class="col">' +
+        '<div class="pbox-head">' + title + '</div>' +
+        '<div class="pline"><b>Company Name:</b> ' + esc(val(c.name)) + '</div>' +
+        '<div class="pline"><b>Address:</b> ' + esc(val(c.address)) + '</div>' +
+        '<div class="pline"><b>City:</b> ' + esc(val(c.city)) + '</div>' +
+        '<div class="pline"><b>Country:</b> ' + esc(val(c.country)) + '</div>' +
+        '<div class="pline"><b>Phone / Mobile:</b> ' + esc(val(c.mobile)) + '</div>' +
+        '<div class="pline"><b>Email:</b> ' + esc(val(c.email)) + '</div>' +
+      '</div>' +
+      '<div class="col">' +
+        '<div class="pline"><b>Authority:</b> ' + esc(val(c.authority)) + '</div>' +
+        '<div class="pline"><b>Trade License:</b> ' + esc(val(c.license)) + '</div>' +
+        '<div class="pline"><b>Trade License Exp. Date:</b> ' + esc(val(c.licenseExp)) + '</div>' +
+        '<div class="pline"><b>Representor:</b> ' + esc(val(c.representor)) + '</div>' +
+        '<div class="pline"><b>Representor Passport No:</b> ' + esc(val(c.repPassport)) + '</div>' +
+        '<div class="pline"><b>Representor Passport Exp. Date:</b> ' + esc(val(c.repPassportExp)) + '</div>' +
+      '</div>' +
+    '</div>';
 }
 
 function scheduleHtml(d) {
