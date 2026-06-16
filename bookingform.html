@@ -122,6 +122,8 @@ const C_NATIONALITY = 'UF_CRM_1767691283';
 const C_CITY        = 'UF_CRM_1781458367322';
 const C_COUNTRY     = 'UF_CRM_1781458379196';
 const C_INCORP      = 'UF_CRM_1781458599043';
+const C_UAE_RESIDENT = 'UF_CRM_1781640051215';      // dropdown: Yes (1289) / No (1291)
+const UAE_RESIDENT_MAP = { '1289': 'Yes', '1291': 'No' };
 
 // Product (catalog) property IDs
 const PROD_TYPE  = 177;   // Unit Type
@@ -384,8 +386,9 @@ async function loadContacts() {
             const cRes = await callBX('crm.contact.get', { id: cid });
             const c = cRes.result ? cRes.result : cRes;
             const typeId = getUF(c, C_TYPE);
-            const typeLabel = (typeMap[typeId] || '').toLowerCase();
-            c.__order = (typeLabel.indexOf('2') !== -1) ? 2 : (typeLabel.indexOf('1') !== -1 ? 1 : (i + 1));
+            const typeLabel = (typeMap[typeId] || '');
+            const m = typeLabel.match(/(\d+)/);
+            c.__order = m ? parseInt(m[1], 10) : (i + 1);
             loaded.push(c);
         } catch (e) { console.warn('[BookingForm] contact', cid, e); }
     }
@@ -408,7 +411,8 @@ function contactToPurchaser(c) {
         address:     getUF(c, C_ADDRESS),
         mobile:      getMulti(c, 'PHONE'),
         telephone:   getUF(c, C_TELEPHONE),
-        email:       getMulti(c, 'EMAIL')
+        email:       getMulti(c, 'EMAIL'),
+        uaeResident: UAE_RESIDENT_MAP[getUF(c, C_UAE_RESIDENT)] || ''
     };
 }
 
@@ -454,8 +458,7 @@ function buildData(deal, pj, plan, contacts, product) {
         furnished: (pj.furnished === 'Yes' || pj.furnished === true) ? 'Yes' : 'No',
         plan: plan, planLabel: PLAN_LABELS[plan] || plan || '\u2014',
         schedule: schedule,
-        p1: contactToPurchaser(contacts[0]),
-        p2: contactToPurchaser(contacts[1]),
+        purchasers: contacts.map(contactToPurchaser),
         agents: {
             assisted: getUF(deal, F_AGENT_ASSISTED),
             agencyName: getUF(deal, F_AGENCY_NAME),
@@ -501,41 +504,81 @@ function baseSchedule(plan, pj, booking, netPayable) {
     return [];
 }
 
-// Custom schedule from the stored custom fields:
-// Downpayment % + N installments (remaining %, split, at chosen frequency) + On Possession %
+// Custom schedule (new structure): Downpayment + During Construction installments +
+// On Possession + Post Handover installments. Installment numbers run CONTINUOUSLY across
+// both installment phases; Downpayment and On Possession are unnumbered (locked) rows.
 function buildCustomSchedule(pj, net) {
+    const freqMap = { monthly: 1, quarterly: 3, biannually: 6, annually: 12 };
+    const pctOf = function(amt) { return net > 0 ? round2(amt / net * 100) : 0; };
+
     const dp  = toNumber(pj.downpaymentPct);
+    const dc  = toNumber(pj.duringConstructionPct);
     const pos = toNumber(pj.possessionPct);
-    const n   = Math.max(0, parseInt(pj.paymentPlanUnits, 10) || 0);
-    const freqMonths = ({ monthly: 1, quarterly: 3, biannually: 6, annually: 12 })[pj.innerPaymentPlan] || 1;
+
     const dpDate  = pj.downpaymentDate ? new Date(pj.downpaymentDate) : new Date();
     const posDate = pj.possessionDate ? new Date(pj.possessionDate) : null;
+    const dcStart = pj.duringConstructionStartDate ? new Date(pj.duringConstructionStartDate) : dpDate;
+    const phStart = pj.postHandoverStartDate ? new Date(pj.postHandoverStartDate) : (posDate || dpDate);
+    const dcN = Math.max(0, parseInt(pj.duringConstructionPayments, 10) || 0);
+    const phN = Math.max(0, parseInt(pj.postHandoverPayments, 10) || 0);
+    const dcF = freqMap[pj.duringConstructionFreq] || 1;
+    const phF = freqMap[pj.postHandoverFreq] || 1;
+
+    const dpAmt  = round2(net * dp / 100);
+    const dcTot  = round2(net * dc / 100);
+    const posAmt = round2(net * pos / 100);
+    const phTot  = round2(net - dpAmt - dcTot - posAmt);   // remainder closes the plan to 100%
+
+    function split(total, count) {
+        const arr = []; let acc = 0; const each = count > 0 ? round2(total / count) : 0;
+        for (let i = 0; i < count; i++) {
+            const amt = (i === count - 1) ? round2(total - acc) : each;
+            arr.push(amt); acc = round2(acc + amt);
+        }
+        return arr;
+    }
 
     const rows = [];
-    rows.push({ label: 'Downpayment', pct: round2(dp),
-                amount: round2(net * dp / 100), dateStr: fmtDate(dpDate), ts: dpDate.getTime(),
-                locked: true, instNo: null });
+    let instNo = 0;
 
-    const instPctTotal = Math.max(0, 100 - dp - pos);
-    const each = n > 0 ? instPctTotal / n : 0;
-    for (let i = 1; i <= n; i++) {
-        const d = addMonths(dpDate, i * freqMonths);
-        rows.push({ label: ordinal(i) + ' Installment', pct: round2(each),
-                    amount: round2(net * each / 100),
-                    dateStr: fmtDate(d), ts: d.getTime(),
-                    locked: false, instNo: i });
+    // 1) Downpayment (locked, unnumbered)
+    rows.push({ label: 'Downpayment', pct: round2(dp), amount: dpAmt,
+                dateStr: fmtDate(dpDate), ts: dpDate.getTime(), locked: true, instNo: null });
+
+    // 2) During Construction installments (continuous numbering)
+    const dcAmts = split(dcTot, dcN);
+    for (let i = 0; i < dcN; i++) {
+        instNo++;
+        const d = addMonths(dcStart, i * dcF);
+        rows.push({ label: ordinal(instNo) + ' Installment', pct: pctOf(dcAmts[i]),
+                    amount: dcAmts[i], dateStr: fmtDate(d), ts: d.getTime(),
+                    locked: false, instNo: instNo });
     }
-    rows.push({ label: 'On Possession', pct: round2(pos),
-                amount: round2(net * pos / 100),
+
+    // 3) On Possession (locked, unnumbered) — between the two installment phases
+    rows.push({ label: 'On Possession', pct: round2(pos), amount: posAmt,
                 dateStr: posDate ? fmtDate(posDate) : '\u2014',
-                ts: posDate ? posDate.getTime() : Number.MAX_SAFE_INTEGER,
-                locked: true, instNo: null });
+                ts: posDate ? posDate.getTime() : null, locked: true, instNo: null });
+
+    // 4) Post Handover installments (numbering continues)
+    const phAmts = split(phTot, phN);
+    for (let j = 0; j < phN; j++) {
+        instNo++;
+        const d2 = addMonths(phStart, j * phF);
+        rows.push({ label: ordinal(instNo) + ' Installment', pct: pctOf(phAmts[j]),
+                    amount: phAmts[j], dateStr: fmtDate(d2), ts: d2.getTime(),
+                    locked: false, instNo: instNo });
+    }
+
     return rows;
 }
 
-/* Wrap the base schedule, apply balloons, then order rows by payment date */
+/* Wrap the base schedule, apply balloons, then order rows by payment date
+   (custom keeps its fixed phase order — Downpayment → During Construction →
+   On Possession → Post Handover — since those dates are already in order). */
 function buildSchedule(plan, pj, booking, net) {
     const rows = applyBalloons(baseSchedule(plan, pj, booking, net), pj);
+    if (plan === 'custom') return rows;
     return rows
         .map(function(r, i) { r._i = i; return r; })
         .sort(function(a, b) {
@@ -613,8 +656,22 @@ function purchaserHtml(title, p) {
         '<div class="pline"><b>Mobile:</b> ' + esc(val(p.mobile)) + '</div>' +
         '<div class="pline"><b>Telephone:</b> ' + esc(val(p.telephone)) + '</div>' +
         '<div class="pline"><b>Email:</b> ' + esc(val(p.email)) + '</div>' +
+        '<div class="pline"><b>UAE Resident:</b> ' + esc(val(p.uaeResident)) + '</div>' +
       '</div>' +
     '</div>';
+}
+
+function purchaserSectionsHtml(d) {
+    var list = (d.purchasers && d.purchasers.length) ? d.purchasers : [null];
+    var note = '<div class="note"><b>Note and Warning:</b> The above address/contact details are considered the Purchaser\u2019s primary address and chosen domicile and shall be printed on the Vendor\u2019s Sales and Purchase Agreement. Such contact details including email and mobile number shall be used i) for all communications/correspondences with the Purchaser and ii) to transact with the Vendor on digital channels like websites and applications. Sharing your contact details information and/or passwords with others may give them access to your personal information as well as the possibility to transact with the Vendor in your name and on your behalf.</div>';
+    var html = '';
+    list.forEach(function(p, i) {
+        var n = i + 1;
+        html += '<div class="sec-title">Purchaser ' + n + ' Information</div>' +
+                purchaserHtml('PURCHASER ' + n + ' INFORMATION', p);
+        if (i === 0) html += note;   // primary-address note under Purchaser 1 only
+    });
+    return html;
 }
 
 function scheduleHtml(d) {
@@ -680,12 +737,7 @@ function renderForm(d) {
         '<div class="row"><b>First Instalment Payment (\u201CDeposit\u201D):</b> ' + money(d.deposit) + '</div>' +
       '</div>' +
 
-      '<div class="sec-title">Purchaser 1 Information</div>' +
-      purchaserHtml('PURCHASER 1 INFORMATION', d.p1) +
-      '<div class="note"><b>Note and Warning:</b> The above address/contact details are considered the Purchaser\u2019s primary address and chosen domicile and shall be printed on the Vendor\u2019s Sales and Purchase Agreement. Such contact details including email and mobile number shall be used i) for all communications/correspondences with the Purchaser and ii) to transact with the Vendor on digital channels like websites and applications. Sharing your contact details information and/or passwords with others may give them access to your personal information as well as the possibility to transact with the Vendor in your name and on your behalf.</div>' +
-
-      '<div class="sec-title">Purchaser 2 Information</div>' +
-      purchaserHtml('PURCHASER 2 INFORMATION', d.p2) +
+      purchaserSectionsHtml(d) +
 
       '<div class="page-break"></div>' +
       scheduleHtml(d) +
