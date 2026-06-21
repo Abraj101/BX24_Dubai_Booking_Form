@@ -109,6 +109,12 @@
 const JSON_FIELD          = 'UF_CRM_1781355927497';   // payment-plan JSON on the deal
 const BOOKING_FILE_FIELD  = 'UF_CRM_1781466371901';   // file field to attach the PDF to
 
+// Same-origin image proxy (an Express route in server.js — see /image-proxy).
+// cdn.bitrix24.com sends no CORS header, so the unit image can only be embedded
+// into the PDF when fetched through a proxy on this app's own domain. Set to ''
+// to disable (image then shows in the on-screen preview only, not in the PDF).
+const IMAGE_PROXY = '/image-proxy?url=';
+
 // Deal fields — Agents Information
 const F_AGENT_ASSISTED = 'UF_CRM_1781459668675';
 const F_AGENCY_NAME    = 'UF_CRM_1781459681223';
@@ -528,8 +534,16 @@ async function loadUnitImage(pid, product) {
 
     url = absolutize(url);
     console.log('[BookingForm] unit image URL:', url);
-    const inlined = await toDataURL(url);
-    return inlined || url;   // fall back to the direct URL if inlining is blocked
+
+    // Inline as a data-URI (needed for the PDF). Fetch through the same-origin proxy
+    // when configured, since the CDN itself blocks cross-origin reads.
+    const fetchUrl = IMAGE_PROXY ? (IMAGE_PROXY + encodeURIComponent(url)) : url;
+    const inlined = await toDataURL(fetchUrl);
+    if (inlined && inlined.indexOf('data:') === 0) return inlined;
+
+    console.warn('[BookingForm] could not inline image (proxy missing or blocked); ' +
+                 'it will show in the preview but not in the PDF.');
+    return url;   // direct URL: displays on screen, blank in the PDF
 }
 
 async function loadContacts() {
@@ -1002,7 +1016,7 @@ function unitLayoutHtml(d) {
     if (!d.unitImage) return '';
     return '<div class="sec-title">Unit Layout</div>' +
            '<div class="unit-layout avoid-break">' +
-             '<img src="' + d.unitImage + '" alt="Unit Layout" crossorigin="anonymous">' +
+             '<img src="' + d.unitImage + '" alt="Unit Layout">' +
            '</div>';
 }
 
