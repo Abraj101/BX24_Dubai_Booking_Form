@@ -71,7 +71,7 @@
     ol.tnc li { font-size: 10px; line-height: 1.55; margin-bottom: 7px; text-align: justify; }
 
     .agents .aline { font-size: 11px; margin-bottom: 6px; }
-    .sig-row { display: flex; justify-content: space-between; margin: 34px 0 6px; }
+    .sig-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 30px 0; margin: 34px 0 6px; }
     .sig-box { width: 45%; }
     .sig-line { border-top: 1px solid #333; padding-top: 4px; font-size: 10px; font-weight: 700; text-align: center; }
     .sig-full { margin-top: 26px; font-size: 11px; }
@@ -905,28 +905,46 @@ function purchaserHtml(title, p) {
 function purchaserSectionsHtml(d) {
     var note = '<div class="note"><b>Note and Warning:</b> The above address/contact details are considered the Purchaser\u2019s primary address and chosen domicile and shall be printed on the Vendor\u2019s Sales and Purchase Agreement. Such contact details including email and mobile number shall be used i) for all communications/correspondences with the Purchaser and ii) to transact with the Vendor on digital channels like websites and applications. Sharing your contact details information and/or passwords with others may give them access to your personal information as well as the possibility to transact with the Vendor in your name and on your behalf.</div>';
 
+    var heading = '<div class="sec-title">Purchaser Information</div>';
+
     // Company purchase: show the company block instead of individual purchasers
     if (d.company) {
-        return '<div class="sec-title">Purchaser Information (Company)</div>' +
-               companyHtml('PURCHASER INFORMATION (COMPANY)', d.company) + note;
+        return heading +
+               companyHtml('Purchaser (Company) Information', d.company) + note;
     }
 
     var list = (d.purchasers && d.purchasers.length) ? d.purchasers : [null];
-    var html = '';
+    var html = heading;
     var pnum = 0;
     var notePlaced = false;
     list.forEach(function(p) {
         if (p && p.isMinor) {
-            html += '<div class="sec-title">Minor Information</div>' +
-                    purchaserHtml('MINOR INFORMATION', p);
+            html += purchaserHtml('Purchaser (Minor) Information', p);
         } else {
             pnum++;
-            html += '<div class="sec-title">Purchaser ' + pnum + ' Information</div>' +
-                    purchaserHtml('PURCHASER ' + pnum + ' INFORMATION', p);
+            html += purchaserHtml('Purchaser ' + pnum + ' Information', p);
         }
         if (!notePlaced) { html += note; notePlaced = true; }   // primary-address note under first block
     });
     return html;
+}
+
+// Purchaser signature lines under Agents Information — one per purchaser block.
+// 1 signatory  -> "Purchaser's Signature"
+// 2+ signatories -> "Purchaser 1 Signature", "Purchaser 2 Signature", …
+// Company / minor count as a single purchaser each.
+function signaturesHtml(d) {
+    var n = d.company ? 1 : ((d.purchasers && d.purchasers.length) ? d.purchasers.length : 1);
+    if (n === 1) {
+        return '<div class="sig-row avoid-break" style="justify-content:center">' +
+                 '<div class="sig-box"><div class="sig-line">Purchaser\u2019s Signature</div></div>' +
+               '</div>';
+    }
+    var boxes = '';
+    for (var i = 1; i <= n; i++) {
+        boxes += '<div class="sig-box"><div class="sig-line">Purchaser ' + i + ' Signature</div></div>';
+    }
+    return '<div class="sig-row avoid-break">' + boxes + '</div>';
 }
 
 function companyHtml(title, c) {
@@ -1060,10 +1078,7 @@ function renderForm(d) {
         '<div class="aline"><b>Agency Representative\u2019s Signature:</b> ____________________</div>' +
       '</div>' +
 
-      '<div class="sig-row avoid-break">' +
-        '<div class="sig-box"><div class="sig-line">PURCHASER 1 SIGNATURE</div></div>' +
-        '<div class="sig-box"><div class="sig-line">PURCHASER 2 SIGNATURE</div></div>' +
-      '</div>' +
+      signaturesHtml(d) +
       '<div class="sig-full">Sales Advisor Name &amp; Signature (on Behalf of the Vendor) <span class="ln"></span></div>' +
 
       '<div class="apt-type">APARTMENT TYPE: ' + esc(val(d.type)) + '</div>' +
