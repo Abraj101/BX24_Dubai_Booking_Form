@@ -452,7 +452,7 @@ async function loadAll() {
                 console.log('[BookingForm] product', pid, product);
                 console.log('[BookingForm] Type/Area/Floor =',
                     getProp(product, PROD_TYPE), '/', getProp(product, PROD_SQFT), '/', getProp(product, PROD_FLOOR));
-                unitImage = await loadUnitImage(pid);
+                unitImage = await loadUnitImage(pid, product);
             }
         }
     } catch (e) { console.warn('[BookingForm] product load failed (check catalog scope on this app):', e); }
@@ -465,30 +465,71 @@ async function loadAll() {
     notifyResize();
 }
 
-// Fetch the unit layout image for the selected product and inline it as a data-URI.
-async function loadUnitImage(pid) {
+// Pull a usable URL out of any Bitrix picture value (object / array / string / id).
+function pictureUrl(v) {
+    if (!v) return '';
+    if (Array.isArray(v)) v = v[0];
+    if (v && typeof v === 'object') {
+        return v.downloadUrl || v.DOWNLOAD_URL || v.detailUrl || v.DETAIL_URL ||
+               v.showUrl || v.SHOW_URL || v.src || v.SRC || v.url || v.URL || '';
+    }
+    if (typeof v === 'string' && v.indexOf('http') === 0) return v;
+    return '';
+}
+function absolutize(url) {
+    if (!url || url.indexOf('http') === 0) return url || '';
+    let dom = (BX24.getDomain && BX24.getDomain()) || location.host;
+    dom = dom.replace(/^https?:\/\//, '');
+    return 'https://' + dom + (url.charAt(0) === '/' ? '' : '/') + url;
+}
+
+// Fetch the unit layout image for the selected product. Tries several sources
+// (productImage.list -> crm.product.get -> the already-loaded catalog product),
+// logs what it finds, then inlines the image as a data-URI for reliable PDF output.
+async function loadUnitImage(pid, product) {
+    let url = '';
+
+    // 1) catalog.productImage.list
     try {
         const imgData = await callBX('catalog.productImage.list', { productId: pid });
+        console.log('[BookingForm] productImage.list raw:', imgData);
         let imgs = (imgData && imgData.productImages) ? imgData.productImages
                  : (imgData && imgData.result && imgData.result.productImages) ? imgData.result.productImages
                  : (Array.isArray(imgData) ? imgData : (imgData && imgData.result) || []);
-        if (!Array.isArray(imgs) || !imgs.length) return '';
-        // Prefer the detail picture, then preview, then any additional photo.
-        const order = ['DETAIL_PICTURE', 'PREVIEW_PICTURE', 'MORE_PHOTO'];
-        let chosen = null;
-        for (let i = 0; i < order.length && !chosen; i++) {
-            chosen = imgs.find(function(x) { return x.type === order[i]; });
+        if (Array.isArray(imgs) && imgs.length) {
+            const order = ['DETAIL_PICTURE', 'PREVIEW_PICTURE', 'MORE_PHOTO'];
+            let chosen = null;
+            for (let i = 0; i < order.length && !chosen; i++) {
+                chosen = imgs.find(function(x) { return x.type === order[i]; });
+            }
+            if (!chosen) chosen = imgs[0];
+            url = chosen ? (chosen.detailUrl || chosen.downloadUrl || chosen.DETAIL_URL || chosen.DOWNLOAD_URL || '') : '';
         }
-        if (!chosen) chosen = imgs[0];
-        let url = chosen ? (chosen.detailUrl || chosen.downloadUrl || chosen.DETAIL_URL || chosen.DOWNLOAD_URL || '') : '';
-        if (!url) return '';
-        if (url.indexOf('http') !== 0) {                      // make relative URLs absolute
-            let dom = (BX24.getDomain && BX24.getDomain()) || location.host;
-            dom = dom.replace(/^https?:\/\//, '');
-            url = 'https://' + dom + (url.charAt(0) === '/' ? '' : '/') + url;
-        }
-        return await toDataURL(url);
-    } catch (e) { console.warn('[BookingForm] unit image load failed:', e); return ''; }
+    } catch (e) { console.warn('[BookingForm] productImage.list failed:', e); }
+
+    // 2) crm.product.get -> DETAIL_PICTURE / PREVIEW_PICTURE
+    if (!url) {
+        try {
+            const pr = await callBX('crm.product.get', { id: pid });
+            const prod = pr && pr.result ? pr.result : pr;
+            console.log('[BookingForm] crm.product.get picture fields:',
+                prod && prod.DETAIL_PICTURE, prod && prod.PREVIEW_PICTURE);
+            url = pictureUrl(prod && prod.DETAIL_PICTURE) || pictureUrl(prod && prod.PREVIEW_PICTURE);
+        } catch (e) { console.warn('[BookingForm] crm.product.get failed:', e); }
+    }
+
+    // 3) already-loaded catalog product object
+    if (!url && product) {
+        url = pictureUrl(product.detailPicture) || pictureUrl(product.previewPicture) ||
+              pictureUrl(product.DETAIL_PICTURE) || pictureUrl(product.PREVIEW_PICTURE);
+    }
+
+    if (!url) { console.warn('[BookingForm] no unit image URL found for product', pid); return ''; }
+
+    url = absolutize(url);
+    console.log('[BookingForm] unit image URL:', url);
+    const inlined = await toDataURL(url);
+    return inlined || url;   // fall back to the direct URL if inlining is blocked
 }
 
 async function loadContacts() {
@@ -880,11 +921,20 @@ function companyHtml(title, c) {
                '</div><div class="pline">\u2014</div></div><div class="col"></div></div>';
     }
 
-    // UAE Incorporated -> Authority Name ; Not UAE Incorporated -> Representative name ;
-    // unset -> neither line is shown.
-    var authOrRep = '';
-    if (c.uaeIncorpId === '1355')      authOrRep = detailLine('Authority Name', c.authority);
-    else if (c.uaeIncorpId === '1357') authOrRep = detailLine('Representative name', c.repName);
+    // UAE Incorporated = Yes  -> Authority Name + Free Zone / Main Land Company
+    // UAE Incorporated = No   -> Representative's Name + Passport No + Passport Exp. Date
+    // (unset -> neither group). Trade License + expiry always follow.
+    var details = '';
+    if (c.uaeIncorpId === '1355') {
+        details =
+            detailLine('Authority Name', c.authority) +
+            detailLine('Free Zone / Main Land Company', c.zone);
+    } else if (c.uaeIncorpId === '1357') {
+        details =
+            detailLine('Representative\u2019s Name', c.repName) +
+            detailLine('Representative\u2019s Passport No', c.repPassport) +
+            detailLine('Representative\u2019s Passport Exp. Date', c.repPassportExp);
+    }
 
     return '' +
     '<div class="purchaser-box avoid-break">' +
@@ -899,12 +949,9 @@ function companyHtml(title, c) {
       '</div>' +
       '<div class="col">' +
         detailLine('UAE Incorporated', c.uaeIncorp) +
-        detailLine('Free Zone / Main Land Company', c.zone) +
-        authOrRep +
+        details +
         detailLine('Trade License', c.license) +
         detailLine('Trade License Exp. Date', c.licenseExp) +
-        detailLine('Representative Passport No', c.repPassport) +
-        detailLine('Representative Passport Exp. Date', c.repPassportExp) +
       '</div>' +
     '</div>';
 }
@@ -981,12 +1028,12 @@ function renderForm(d) {
         '<div class="row"><b>First Instalment Payment (\u201CDeposit\u201D):</b> ' + money(d.deposit) + '</div>' +
       '</div>' +
 
-      unitLayoutHtml(d) +
-
       purchaserSectionsHtml(d) +
 
       '<div class="page-break"></div>' +
       scheduleHtml(d) +
+
+      unitLayoutHtml(d) +
 
       '<div class="page-break"></div>' +
       tncHtml() +
