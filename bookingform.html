@@ -154,6 +154,7 @@ const BUILDING = 'South Lofts 1';
 const ADMIN_FEE   = 5250;   // AED flat
 const DLD_RATE    = 0.04;   // 4% of purchase price (shown separately, NOT added to total)
 const FURNISHED_FEE = 25000; // AED, shown when Furnished is turned on
+const PRIVATE_POOL_FEE = 100000; // AED, shown when Private Pool is turned on
 
 // Completion / handover assumption: completion = booking date + this many months.
 // The filled template uses 24 months. Change here if a handover-date field is added.
@@ -505,6 +506,7 @@ function buildData(deal, pj, plan, contacts, product, company) {
         discPct: discPct, discValue: discValue, netPayable: netPayable,
         dldFee: dldFee, adminFee: ADMIN_FEE,
         furnished: (pj.furnished === 'Yes' || pj.furnished === true) ? 'Yes' : 'No',
+        privatePool: (pj.privatePool === 'Yes' || pj.privatePool === true) ? 'Yes' : 'No',
         plan: plan, planLabel: PLAN_LABELS[plan] || plan || '\u2014',
         schedule: schedule,
         purchasers: contacts.map(contactToPurchaser),
@@ -523,6 +525,10 @@ function parseInstNo(label) {
 }
 
 function baseSchedule(plan, pj, booking, netPayable) {
+    if (plan !== 'custom' && pj && pj.downpaymentStartDate) {
+        const dps = new Date(pj.downpaymentStartDate);
+        if (!isNaN(dps.getTime())) booking = dps;   // standard plans anchor to the chosen start date
+    }
     const completion = addMonths(booking, HANDOVER_MONTHS);
     function dateFor(when) {
         if (when.type === 'booking')    return addMonths(booking, when.months);
@@ -786,6 +792,9 @@ function scheduleHtml(d) {
         '<div class="row"><b>Admin Fee (payable separately):</b> ' + money(d.adminFee) + '</div>' +
         '<div class="row"><b>Furnished:</b> ' + (d.furnished === 'Yes'
             ? 'Yes (' + money(FURNISHED_FEE) + ')'
+            : 'No') + '</div>' +
+        '<div class="row"><b>Private Pool:</b> ' + (d.privatePool === 'Yes'
+            ? 'Yes (' + money(PRIVATE_POOL_FEE) + ')'
             : 'No') + '</div>' +
     '</div>' +
     '<table class="ip-table">' +
