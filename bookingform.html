@@ -85,6 +85,9 @@
 
     .apt-type { font-weight: 800; font-size: 12px; margin: 22px 0 6px; }
 
+    .unit-layout { border: 1px solid #333; padding: 8px; text-align: center; margin-bottom: 4px; }
+    .unit-layout img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+
     .page-break { page-break-before: always; }
     .avoid-break { page-break-inside: avoid; }
 </style>
@@ -110,6 +113,8 @@ const BOOKING_FILE_FIELD  = 'UF_CRM_1781466371901';   // file field to attach th
 const F_AGENT_ASSISTED = 'UF_CRM_1781459668675';
 const F_AGENCY_NAME    = 'UF_CRM_1781459681223';
 const F_AGENT_REP      = 'UF_CRM_1781459701649';
+// "Assisted by a registered agent" dropdown: Yes (1275) / No (1277)
+const AGENT_ASSISTED_MAP = { '1275': 'Yes', '1277': 'No' };
 
 // Contact fields
 const C_TYPE        = 'UF_CRM_1767876111269';  // enum: Purchaser 1 / Purchaser 2
@@ -125,16 +130,27 @@ const C_INCORP      = 'UF_CRM_1781458599043';
 const C_UAE_RESIDENT = 'UF_CRM_1781640051215';      // dropdown: Yes (1289) / No (1291)
 const UAE_RESIDENT_MAP = { '1289': 'Yes', '1291': 'No' };
 
+// Contact Type dropdown now includes a "Minor" option. When selected, the section
+// is labelled "Minor" and the remaining fields describe the Guardian.
+const C_TYPE_MINOR    = '1353';                     // enum id of the "Minor" option
+const C_GUARDIAN_NAME = 'UF_CRM_1782067857222';     // new field: Guardian's Name
+
 // Company (when the purchaser is a company, not individuals)
 const CO_ADDRESS      = 'UF_CRM_1781650941705';
 const CO_CITY         = 'UF_CRM_1781647920524';
 const CO_COUNTRY      = 'UF_CRM_1781647935480';
-const CO_AUTHORITY    = 'UF_CRM_1781647957582';
+const CO_AUTHORITY    = 'UF_CRM_1781647957582';   // shown as "Authority Name" (UAE incorporated)
 const CO_LICENSE      = 'UF_CRM_1781650776919';
 const CO_LICENSE_EXP  = 'UF_CRM_1781647988565';
-const CO_REP          = 'UF_CRM_1781648029271';
+const CO_REP          = 'UF_CRM_1781648029271';   // legacy representor (superseded by CO_REP_NAME)
 const CO_REP_PASSPORT = 'UF_CRM_1781648051323';
 const CO_REP_PASS_EXP = 'UF_CRM_1781648066813';
+// New company dropdowns / fields
+const CO_UAE_INCORP   = 'UF_CRM_1782068122985';   // UAE Incorporated: Yes (1355) / No (1357)
+const CO_ZONE         = 'UF_CRM_1782068180541';   // Free Zone (1359) / Main Land Company (1361)
+const CO_REP_NAME     = 'UF_CRM_1782068252765';   // Representative name (not UAE incorporated)
+const UAE_INCORP_MAP  = { '1355': 'Yes', '1357': 'No' };
+const ZONE_MAP        = { '1359': 'Free Zone', '1361': 'Main Land Company' };
 
 // Product (catalog) property IDs
 const PROD_TYPE  = 177;   // Unit Type
@@ -325,6 +341,60 @@ function ordinal(n) {
 }
 function round2(n) { return Math.round(n * 100) / 100; }
 
+// Bitrix address fields store components joined by "|;|" with a trailing numeric
+// location id (e.g. "Hello|;|513"). Strip the location id and join the real parts.
+function cleanAddress(raw) {
+    if (raw == null) return '';
+    let s = String(raw);
+    if (s.indexOf('|;|') === -1) return s.trim();
+    let parts = s.split('|;|').map(function(x) { return x.trim(); });
+    while (parts.length && /^\d+$/.test(parts[parts.length - 1])) parts.pop();  // drop trailing loc id(s)
+    return parts.filter(Boolean).join(', ');
+}
+
+// Resolve a "list"/enumeration contact field id to its label via the cached maps.
+let contactEnumMaps = {};
+function resolveContactEnum(field, id) {
+    if (id === '' || id == null) return '';
+    const m = contactEnumMaps[field];
+    return (m && m[id] != null) ? m[id] : id;
+}
+
+// Fetch every contact userfield once and cache id->label maps for list fields.
+async function loadContactEnums() {
+    try {
+        const ufRes = await callBX('crm.contact.userfield.list', {});
+        const ufs = Array.isArray(ufRes) ? ufRes : (ufRes.result || []);
+        ufs.forEach(function(uf) {
+            if (uf.LIST && uf.LIST.length) {
+                const map = {};
+                uf.LIST.forEach(function(o) { map[o.ID] = o.VALUE; });
+                contactEnumMaps[uf.FIELD_NAME] = map;
+            }
+        });
+    } catch (e) { console.warn('[BookingForm] contact userfield enums failed:', e); }
+}
+
+// Fetch an image URL and inline it as a data-URI so html2pdf renders it reliably.
+// Falls back to the raw URL if cross-origin fetch is blocked.
+async function toDataURL(url) {
+    try {
+        const resp = await fetch(url, { mode: 'cors' });
+        const blob = await resp.blob();
+        return await new Promise(function(res, rej) {
+            const fr = new FileReader();
+            fr.onload = function() { res(fr.result); };
+            fr.onerror = rej;
+            fr.readAsDataURL(blob);
+        });
+    } catch (e) { console.warn('[BookingForm] image inline failed, using direct URL:', e); return url; }
+}
+
+// Shared "<b>Label:</b> value" line used by the purchaser/minor/company blocks.
+function detailLine(label, value) {
+    return '<div class="pline"><b>' + label + ':</b> ' + esc(val(value)) + '</div>';
+}
+
 /* ════════════════ LOAD ════════════════ */
 function setStatus(msg, err) {
     const el = document.getElementById('status');
@@ -369,6 +439,7 @@ async function loadAll() {
 
     // 4) Product (unit) from the first product row
     let product = null;
+    let unitImage = '';
     try {
         const rowsData = await callBX('crm.deal.productrows.get', { id: currentDealId });
         const rows = Array.isArray(rowsData) ? rowsData : (rowsData.result || []);
@@ -381,16 +452,43 @@ async function loadAll() {
                 console.log('[BookingForm] product', pid, product);
                 console.log('[BookingForm] Type/Area/Floor =',
                     getProp(product, PROD_TYPE), '/', getProp(product, PROD_SQFT), '/', getProp(product, PROD_FLOOR));
+                unitImage = await loadUnitImage(pid);
             }
         }
     } catch (e) { console.warn('[BookingForm] product load failed (check catalog scope on this app):', e); }
 
     // 5) Assemble + render
-    const data = buildData(deal, pj, plan, contacts, product, company);
+    const data = buildData(deal, pj, plan, contacts, product, company, unitImage);
     renderForm(data);
     document.getElementById('attachBtn').disabled = false;
     setStatus('Ready — review, then Attach to Deal.');
     notifyResize();
+}
+
+// Fetch the unit layout image for the selected product and inline it as a data-URI.
+async function loadUnitImage(pid) {
+    try {
+        const imgData = await callBX('catalog.productImage.list', { productId: pid });
+        let imgs = (imgData && imgData.productImages) ? imgData.productImages
+                 : (imgData && imgData.result && imgData.result.productImages) ? imgData.result.productImages
+                 : (Array.isArray(imgData) ? imgData : (imgData && imgData.result) || []);
+        if (!Array.isArray(imgs) || !imgs.length) return '';
+        // Prefer the detail picture, then preview, then any additional photo.
+        const order = ['DETAIL_PICTURE', 'PREVIEW_PICTURE', 'MORE_PHOTO'];
+        let chosen = null;
+        for (let i = 0; i < order.length && !chosen; i++) {
+            chosen = imgs.find(function(x) { return x.type === order[i]; });
+        }
+        if (!chosen) chosen = imgs[0];
+        let url = chosen ? (chosen.detailUrl || chosen.downloadUrl || chosen.DETAIL_URL || chosen.DOWNLOAD_URL || '') : '';
+        if (!url) return '';
+        if (url.indexOf('http') !== 0) {                      // make relative URLs absolute
+            let dom = (BX24.getDomain && BX24.getDomain()) || location.host;
+            dom = dom.replace(/^https?:\/\//, '');
+            url = 'https://' + dom + (url.charAt(0) === '/' ? '' : '/') + url;
+        }
+        return await toDataURL(url);
+    } catch (e) { console.warn('[BookingForm] unit image load failed:', e); return ''; }
 }
 
 async function loadContacts() {
@@ -400,15 +498,9 @@ async function loadContacts() {
         items = Array.isArray(r) ? r : (r.result || []);
     } catch (e) { console.warn('[BookingForm] contact items:', e); }
 
-    // Enum map for Contact Type
-    let typeMap = {};
-    try {
-        const ufRes = await callBX('crm.contact.userfield.list', { filter: { FIELD_NAME: C_TYPE } });
-        const ufs = Array.isArray(ufRes) ? ufRes : (ufRes.result || []);
-        if (ufs.length && ufs[0].LIST) {
-            ufs[0].LIST.forEach(function(o) { typeMap[o.ID] = o.VALUE; });
-        }
-    } catch (e) { /* fallback to order */ }
+    // Load id->label maps for every contact list field (Contact Type, Nationality, …)
+    await loadContactEnums();
+    const typeMap = contactEnumMaps[C_TYPE] || {};
 
     const loaded = [];
     for (let i = 0; i < items.length; i++) {
@@ -431,16 +523,19 @@ async function loadContacts() {
 function contactToPurchaser(c) {
     if (!c) return null;
     const name = [c.NAME, c.SECOND_NAME, c.LAST_NAME].filter(Boolean).join(' ').trim();
+    const rawType = String(getUF(c, C_TYPE));
     return {
         name:        name,
+        isMinor:     rawType === C_TYPE_MINOR,
+        guardianName: getUF(c, C_GUARDIAN_NAME),
         license:     getUF(c, C_LICENSE),
         incorp:      getUF(c, C_INCORP),
-        nationality: getUF(c, C_NATIONALITY),
+        nationality: resolveContactEnum(C_NATIONALITY, getUF(c, C_NATIONALITY)),
         passport:    getUF(c, C_PASSPORT),
         pobox:       getUF(c, C_POBOX),
         city:        getUF(c, C_CITY),
         country:     getUF(c, C_COUNTRY),
-        address:     getUF(c, C_ADDRESS),
+        address:     cleanAddress(getUF(c, C_ADDRESS)),
         mobile:      getMulti(c, 'PHONE'),
         telephone:   getUF(c, C_TELEPHONE),
         email:       getMulti(c, 'EMAIL'),
@@ -451,23 +546,28 @@ function contactToPurchaser(c) {
 /* ════════════════ BUILD DATA ════════════════ */
 function companyToObj(co) {
     if (!co) return null;
+    const uaeIncorpId = String(getUF(co, CO_UAE_INCORP) || '');
+    const zoneId      = String(getUF(co, CO_ZONE) || '');
     return {
         name:           co.TITLE || '',
-        address:        getUF(co, CO_ADDRESS),
+        address:        cleanAddress(getUF(co, CO_ADDRESS)),
         city:           getUF(co, CO_CITY),
         country:        getUF(co, CO_COUNTRY),
         mobile:         getMulti(co, 'PHONE'),
         email:          getMulti(co, 'EMAIL'),
+        uaeIncorpId:    uaeIncorpId,
+        uaeIncorp:      UAE_INCORP_MAP[uaeIncorpId] || '',
+        zone:           ZONE_MAP[zoneId] || '',
         authority:      getUF(co, CO_AUTHORITY),
+        repName:        getUF(co, CO_REP_NAME),
         license:        getUF(co, CO_LICENSE),
         licenseExp:     maybeDate(getUF(co, CO_LICENSE_EXP)),
-        representor:    getUF(co, CO_REP),
         repPassport:    getUF(co, CO_REP_PASSPORT),
         repPassportExp: maybeDate(getUF(co, CO_REP_PASS_EXP))
     };
 }
 
-function buildData(deal, pj, plan, contacts, product, company) {
+function buildData(deal, pj, plan, contacts, product, company, unitImage) {
     const today = new Date();
     const discPct = toNumber(pj.discountPct);
 
@@ -511,8 +611,9 @@ function buildData(deal, pj, plan, contacts, product, company) {
         schedule: schedule,
         purchasers: contacts.map(contactToPurchaser),
         company: companyToObj(company),
+        unitImage: unitImage || '',
         agents: {
-            assisted: getUF(deal, F_AGENT_ASSISTED),
+            assisted: AGENT_ASSISTED_MAP[String(getUF(deal, F_AGENT_ASSISTED))] || '',
             agencyName: getUF(deal, F_AGENCY_NAME),
             repName: getUF(deal, F_AGENT_REP)
         }
@@ -694,25 +795,54 @@ function purchaserHtml(title, p) {
         return '<div class="purchaser-box"><div class="col"><div class="pbox-head">' + title +
                '</div><div class="pline">\u2014</div></div><div class="col"></div></div>';
     }
+
+    // Minor: show the minor's name + Guardian's Name, then the remaining fields
+    // relabelled as the Guardian's details (same underlying contact fields).
+    if (p.isMinor) {
+        const g = 'Guardian\u2019s ';
+        return '' +
+        '<div class="purchaser-box avoid-break">' +
+          '<div class="col">' +
+            '<div class="pbox-head">' + title + '</div>' +
+            detailLine('Name', p.name) +
+            detailLine(g + 'Name', p.guardianName) +
+            detailLine(g + 'License No. (For legal entities)', p.license) +
+            detailLine(g + 'Country of Incorporation', p.incorp) +
+            detailLine(g + 'Nationality', p.nationality) +
+            detailLine(g + 'Passport No', p.passport) +
+            detailLine(g + 'P.O. Box / Postal Code', p.pobox) +
+          '</div>' +
+          '<div class="col">' +
+            detailLine(g + 'City', p.city) +
+            detailLine(g + 'Country', p.country) +
+            detailLine(g + 'Address', p.address) +
+            detailLine(g + 'Mobile', p.mobile) +
+            detailLine(g + 'Telephone', p.telephone) +
+            detailLine(g + 'Email', p.email) +
+            detailLine(g + 'UAE Resident', p.uaeResident) +
+          '</div>' +
+        '</div>';
+    }
+
     return '' +
     '<div class="purchaser-box avoid-break">' +
       '<div class="col">' +
         '<div class="pbox-head">' + title + '</div>' +
-        '<div class="pline"><b>Name:</b> ' + esc(val(p.name)) + '</div>' +
-        '<div class="pline"><b>License No. (For legal entities):</b> ' + esc(val(p.license)) + '</div>' +
-        '<div class="pline"><b>Country of Incorporation:</b> ' + esc(val(p.incorp)) + '</div>' +
-        '<div class="pline"><b>Nationality:</b> ' + esc(val(p.nationality)) + '</div>' +
-        '<div class="pline"><b>Passport No:</b> ' + esc(val(p.passport)) + '</div>' +
-        '<div class="pline"><b>P.O. Box / Postal Code:</b> ' + esc(val(p.pobox)) + '</div>' +
+        detailLine('Name', p.name) +
+        detailLine('License No. (For legal entities)', p.license) +
+        detailLine('Country of Incorporation', p.incorp) +
+        detailLine('Nationality', p.nationality) +
+        detailLine('Passport No', p.passport) +
+        detailLine('P.O. Box / Postal Code', p.pobox) +
       '</div>' +
       '<div class="col">' +
-        '<div class="pline"><b>City:</b> ' + esc(val(p.city)) + '</div>' +
-        '<div class="pline"><b>Country:</b> ' + esc(val(p.country)) + '</div>' +
-        '<div class="pline"><b>Address:</b> ' + esc(val(p.address)) + '</div>' +
-        '<div class="pline"><b>Mobile:</b> ' + esc(val(p.mobile)) + '</div>' +
-        '<div class="pline"><b>Telephone:</b> ' + esc(val(p.telephone)) + '</div>' +
-        '<div class="pline"><b>Email:</b> ' + esc(val(p.email)) + '</div>' +
-        '<div class="pline"><b>UAE Resident:</b> ' + esc(val(p.uaeResident)) + '</div>' +
+        detailLine('City', p.city) +
+        detailLine('Country', p.country) +
+        detailLine('Address', p.address) +
+        detailLine('Mobile', p.mobile) +
+        detailLine('Telephone', p.telephone) +
+        detailLine('Email', p.email) +
+        detailLine('UAE Resident', p.uaeResident) +
       '</div>' +
     '</div>';
 }
@@ -728,11 +858,18 @@ function purchaserSectionsHtml(d) {
 
     var list = (d.purchasers && d.purchasers.length) ? d.purchasers : [null];
     var html = '';
-    list.forEach(function(p, i) {
-        var n = i + 1;
-        html += '<div class="sec-title">Purchaser ' + n + ' Information</div>' +
-                purchaserHtml('PURCHASER ' + n + ' INFORMATION', p);
-        if (i === 0) html += note;   // primary-address note under Purchaser 1 only
+    var pnum = 0;
+    var notePlaced = false;
+    list.forEach(function(p) {
+        if (p && p.isMinor) {
+            html += '<div class="sec-title">Minor Information</div>' +
+                    purchaserHtml('MINOR INFORMATION', p);
+        } else {
+            pnum++;
+            html += '<div class="sec-title">Purchaser ' + pnum + ' Information</div>' +
+                    purchaserHtml('PURCHASER ' + pnum + ' INFORMATION', p);
+        }
+        if (!notePlaced) { html += note; notePlaced = true; }   // primary-address note under first block
     });
     return html;
 }
@@ -742,24 +879,32 @@ function companyHtml(title, c) {
         return '<div class="purchaser-box"><div class="col"><div class="pbox-head">' + title +
                '</div><div class="pline">\u2014</div></div><div class="col"></div></div>';
     }
+
+    // UAE Incorporated -> Authority Name ; Not UAE Incorporated -> Representative name ;
+    // unset -> neither line is shown.
+    var authOrRep = '';
+    if (c.uaeIncorpId === '1355')      authOrRep = detailLine('Authority Name', c.authority);
+    else if (c.uaeIncorpId === '1357') authOrRep = detailLine('Representative name', c.repName);
+
     return '' +
     '<div class="purchaser-box avoid-break">' +
       '<div class="col">' +
         '<div class="pbox-head">' + title + '</div>' +
-        '<div class="pline"><b>Company Name:</b> ' + esc(val(c.name)) + '</div>' +
-        '<div class="pline"><b>Address:</b> ' + esc(val(c.address)) + '</div>' +
-        '<div class="pline"><b>City:</b> ' + esc(val(c.city)) + '</div>' +
-        '<div class="pline"><b>Country:</b> ' + esc(val(c.country)) + '</div>' +
-        '<div class="pline"><b>Phone / Mobile:</b> ' + esc(val(c.mobile)) + '</div>' +
-        '<div class="pline"><b>Email:</b> ' + esc(val(c.email)) + '</div>' +
+        detailLine('Company Name', c.name) +
+        detailLine('Address', c.address) +
+        detailLine('City', c.city) +
+        detailLine('Country', c.country) +
+        detailLine('Phone / Mobile', c.mobile) +
+        detailLine('Email', c.email) +
       '</div>' +
       '<div class="col">' +
-        '<div class="pline"><b>Authority:</b> ' + esc(val(c.authority)) + '</div>' +
-        '<div class="pline"><b>Trade License:</b> ' + esc(val(c.license)) + '</div>' +
-        '<div class="pline"><b>Trade License Exp. Date:</b> ' + esc(val(c.licenseExp)) + '</div>' +
-        '<div class="pline"><b>Representor:</b> ' + esc(val(c.representor)) + '</div>' +
-        '<div class="pline"><b>Representor Passport No:</b> ' + esc(val(c.repPassport)) + '</div>' +
-        '<div class="pline"><b>Representor Passport Exp. Date:</b> ' + esc(val(c.repPassportExp)) + '</div>' +
+        detailLine('UAE Incorporated', c.uaeIncorp) +
+        detailLine('Free Zone / Main Land Company', c.zone) +
+        authOrRep +
+        detailLine('Trade License', c.license) +
+        detailLine('Trade License Exp. Date', c.licenseExp) +
+        detailLine('Representative Passport No', c.repPassport) +
+        detailLine('Representative Passport Exp. Date', c.repPassportExp) +
       '</div>' +
     '</div>';
 }
@@ -785,8 +930,6 @@ function scheduleHtml(d) {
     return '' +
     '<div class="sec-title">Installment Plan</div>' +
     '<div class="ip-summary">' +
-        '<div class="row"><b>Discount Percentage:</b> ' + (d.discPct || 0) + '%</div>' +
-        '<div class="row"><b>Discount Value:</b> ' + money(d.discValue) + '</div>' +
         '<div class="row"><b>Net Payable Amount:</b> ' + money(d.netPayable) + '</div>' +
         '<div class="row"><b>DLD Fee (4% of purchase price, payable separately):</b> ' + money(d.dldFee) + '</div>' +
         '<div class="row"><b>Admin Fee (payable separately):</b> ' + money(d.adminFee) + '</div>' +
@@ -806,6 +949,14 @@ function scheduleHtml(d) {
 function tncHtml() {
     return '<div class="sec-title">Terms &amp; Conditions</div><ol class="tnc">' +
         TNC.map(function(t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ol>';
+}
+
+function unitLayoutHtml(d) {
+    if (!d.unitImage) return '';
+    return '<div class="sec-title">Unit Layout</div>' +
+           '<div class="unit-layout avoid-break">' +
+             '<img src="' + d.unitImage + '" alt="Unit Layout" crossorigin="anonymous">' +
+           '</div>';
 }
 
 function renderForm(d) {
@@ -829,6 +980,8 @@ function renderForm(d) {
         '<div class="row"><b>Unit:</b> ' + esc(val(d.unit)) + '</div>' +
         '<div class="row"><b>First Instalment Payment (\u201CDeposit\u201D):</b> ' + money(d.deposit) + '</div>' +
       '</div>' +
+
+      unitLayoutHtml(d) +
 
       purchaserSectionsHtml(d) +
 
