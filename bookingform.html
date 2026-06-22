@@ -129,9 +129,9 @@ const C_PASSPORT    = 'UF_CRM_1766983512371';
 const C_LICENSE     = 'UF_CRM_1781458620043';
 const C_ADDRESS     = 'UF_CRM_1767353184396';
 const C_POBOX       = 'UF_CRM_1781458421648';
-const C_NATIONALITY = 'UF_CRM_1767691283';
+const C_NATIONALITY = 'UF_CRM_1782082979787';   // now a dropdown (list) field
 const C_CITY        = 'UF_CRM_1781458367322';
-const C_COUNTRY     = 'UF_CRM_1781458379196';
+const C_COUNTRY     = 'UF_CRM_1782082896172';   // now a dropdown (list) field
 const C_INCORP      = 'UF_CRM_1781458599043';
 const C_UAE_RESIDENT = 'UF_CRM_1781640051215';      // dropdown: Yes (1289) / No (1291)
 const UAE_RESIDENT_MAP = { '1289': 'Yes', '1291': 'No' };
@@ -144,7 +144,7 @@ const C_GUARDIAN_NAME = 'UF_CRM_1782067857222';     // new field: Guardian's Nam
 // Company (when the purchaser is a company, not individuals)
 const CO_ADDRESS      = 'UF_CRM_1781650941705';
 const CO_CITY         = 'UF_CRM_1781647920524';
-const CO_COUNTRY      = 'UF_CRM_1781647935480';
+const CO_COUNTRY      = 'UF_CRM_1782083162901';   // now a dropdown (list) field
 const CO_AUTHORITY    = 'UF_CRM_1781647957582';   // shown as "Authority Name" (UAE incorporated)
 const CO_LICENSE      = 'UF_CRM_1781650776919';
 const CO_LICENSE_EXP  = 'UF_CRM_1781647988565';
@@ -381,6 +381,34 @@ async function loadContactEnums() {
     } catch (e) { console.warn('[BookingForm] contact userfield enums failed:', e); }
 }
 
+// Same as above for company list fields (e.g. the new Country dropdown).
+let companyEnumMaps = {};
+function resolveCompanyEnum(field, id) {
+    if (id === '' || id == null) return '';
+    const m = companyEnumMaps[field];
+    return (m && m[id] != null) ? m[id] : id;
+}
+async function loadCompanyEnums() {
+    try {
+        const ufRes = await callBX('crm.company.userfield.list', {});
+        const ufs = Array.isArray(ufRes) ? ufRes : (ufRes.result || []);
+        ufs.forEach(function(uf) {
+            if (uf.LIST && uf.LIST.length) {
+                const map = {};
+                uf.LIST.forEach(function(o) { map[o.ID] = o.VALUE; });
+                companyEnumMaps[uf.FIELD_NAME] = map;
+            }
+        });
+    } catch (e) { console.warn('[BookingForm] company userfield enums failed:', e); }
+}
+
+// Convert an area entered in square feet to square metres (1 sq ft = 0.092903 m²).
+function sqftToSqm(v) {
+    var n = parseFloat(String(v == null ? '' : v).replace(/[^0-9.\-]/g, ''));
+    if (!isFinite(n)) return '';
+    return (Math.round(n * 0.092903 * 100) / 100).toFixed(2);
+}
+
 // Fetch an image URL and inline it as a data-URI so html2pdf renders it reliably.
 // Falls back to the raw URL if cross-origin fetch is blocked.
 async function toDataURL(url) {
@@ -440,6 +468,7 @@ async function loadAll() {
         try {
             const coRes = await callBX('crm.company.get', { id: companyId });
             company = coRes.result ? coRes.result : coRes;
+            await loadCompanyEnums();   // id->label maps for company list fields (Country, …)
         } catch (e) { console.warn('[BookingForm] company load failed:', e); }
     }
 
@@ -589,7 +618,7 @@ function contactToPurchaser(c) {
         passport:    getUF(c, C_PASSPORT),
         pobox:       getUF(c, C_POBOX),
         city:        getUF(c, C_CITY),
-        country:     getUF(c, C_COUNTRY),
+        country:     resolveContactEnum(C_COUNTRY, getUF(c, C_COUNTRY)),
         address:     cleanAddress(getUF(c, C_ADDRESS)),
         mobile:      getMulti(c, 'PHONE'),
         telephone:   getUF(c, C_TELEPHONE),
@@ -607,7 +636,7 @@ function companyToObj(co) {
         name:           co.TITLE || '',
         address:        cleanAddress(getUF(co, CO_ADDRESS)),
         city:           getUF(co, CO_CITY),
-        country:        getUF(co, CO_COUNTRY),
+        country:        resolveCompanyEnum(CO_COUNTRY, getUF(co, CO_COUNTRY)),
         mobile:         getMulti(co, 'PHONE'),
         email:          getMulti(co, 'EMAIL'),
         uaeIncorpId:    uaeIncorpId,
@@ -655,6 +684,7 @@ function buildData(deal, pj, plan, contacts, product, company, unitImage) {
         unit: window._unitName || (product ? getProp(product, 'name') : ''),
         type: product ? getProp(product, PROD_TYPE) : '',
         totalArea: product ? getProp(product, PROD_SQFT) : '',
+        totalAreaSqM: product ? sqftToSqm(getProp(product, PROD_SQFT)) : '',
         floor: product ? getProp(product, PROD_FLOOR) : '',
         purchasePrice: purchasePrice,
         deposit: schedule.length ? schedule[0].amount : 0,
@@ -1053,7 +1083,7 @@ function renderForm(d) {
         '<div class="row"><b>Project:</b> ' + esc(PROJECT) + '</div>' +
         '<div class="row"><b>Property Floor:</b> ' + esc(val(d.floor)) + '</div>' +
         '<div class="row"><b>Location:</b> ' + esc(LOCATION) + '</div>' +
-        '<div class="row"><b>Total Area:</b> ' + esc(val(d.totalArea)) + '</div>' +
+        '<div class="row"><b>Total Area:</b> ' + (d.totalAreaSqM ? (esc(d.totalAreaSqM) + ' Sq M') : '\u2014') + '</div>' +
         '<div class="row"><b>Building / Phase:</b> ' + esc(BUILDING) + '</div>' +
         '<div class="row"><b>Purchase Price:</b> ' + money(d.netPayable) + '</div>' +
         '<div class="row"><b>Unit:</b> ' + esc(val(d.unit)) + '</div>' +
