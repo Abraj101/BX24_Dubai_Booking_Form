@@ -85,7 +85,7 @@
     .apt-type { font-weight: 800; font-size: 12px; margin: 22px 0 6px; }
 
     .unit-layout { border: 1px solid #333; padding: 8px; text-align: center; margin-bottom: 4px; }
-    .unit-layout img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+    .unit-layout img { display: block; max-width: 100%; max-height: 215mm; height: auto; margin: 0 auto; }
 
     .page-break { page-break-before: always; }
     .avoid-break { page-break-inside: avoid; }
@@ -1047,9 +1047,11 @@ function tncHtml() {
 
 function unitLayoutHtml(d) {
     if (!d.unitImage) return '';
-    return '<div class="sec-title">Unit Layout</div>' +
-           '<div class="unit-layout avoid-break">' +
-             '<img src="' + d.unitImage + '" alt="Unit Layout">' +
+    return '<div class="avoid-break">' +
+             '<div class="sec-title">Unit Layout</div>' +
+             '<div class="unit-layout">' +
+               '<img src="' + d.unitImage + '" alt="Unit Layout">' +
+             '</div>' +
            '</div>';
 }
 
