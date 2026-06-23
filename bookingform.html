@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dubai Booking Form</title>
 <script src="https://api.bitrix24.com/api/v1/"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-<style>
+<style id="bfStyle">
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #1a1a1a; background: #e9edec; }
 
@@ -1130,30 +1129,41 @@ function renderForm(d) {
 }
 
 /* ════════════════ ATTACH ════════════════ */
+// Send the rendered form HTML (CSS + #formRoot, unit image already inlined) to the
+// server, which renders the PDF with headless Chrome — clean pagination, plus the
+// bf_header.png running header and the page-number / signature footer on every page.
 async function attachToDeal() {
     const btn = document.getElementById('attachBtn');
     btn.disabled = true; btn.textContent = 'Generating PDF…';
-    setStatus('Generating PDF…');
+    setStatus('Generating PDF on the server (this can take a moment)…');
 
     try {
-        const el = document.getElementById('formRoot');
-        const opt = {
-            margin: [6, 6, 8, 6],
-            filename: 'Dubai_Booking_Form_' + bookingNo.replace(/[^0-9A-Za-z]/g, '') + '.pdf',
-            image: { type: 'jpeg', quality: 0.95 },
-            html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
-            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-            pagebreak: { mode: ['css', 'legacy'] }
-        };
+        const css = document.getElementById('bfStyle').textContent;
+        const body = document.getElementById('formRoot').outerHTML;
+        const html = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+                     '<style>' + css + '</style>' +
+                     '<style>body{margin:0;padding:0;background:#fff;}' +
+                     '#formRoot{width:auto;max-width:none;box-shadow:none;}</style>' +
+                     '</head><body>' + body + '</body></html>';
+        const filename = 'Dubai_Booking_Form_' + bookingNo.replace(/[^0-9A-Za-z]/g, '') + '.pdf';
 
-        const dataUri = await html2pdf().set(opt).from(el).outputPdf('datauristring');
-        const base64 = dataUri.split(',')[1];
+        const resp = await fetch('/render-pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ html: html })
+        });
+        if (!resp.ok) {
+            const msg = await resp.text().catch(function() { return ''; });
+            throw new Error('Server render failed (' + resp.status + '): ' + msg);
+        }
+        const data = await resp.json();
+        if (!data || !data.base64) throw new Error('Server returned no PDF data');
 
         btn.textContent = 'Attaching…';
         setStatus('Uploading to the deal…');
 
         const fields = {};
-        fields[BOOKING_FILE_FIELD] = { fileData: [opt.filename, base64] };
+        fields[BOOKING_FILE_FIELD] = { fileData: [filename, data.base64] };
         await callBX('crm.deal.update', { id: currentDealId, fields: fields });
 
         setStatus('\u2713 Attached to the Booking Form field on the General tab.');
