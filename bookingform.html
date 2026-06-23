@@ -66,7 +66,6 @@
     table.ip-table td.r { text-align: right; }
     table.ip-table tr.total td { font-weight: 800; background: #f3f5f4; }
     table.ip-table tr.balloon-row td { font-style: italic; background: #f7faf8; }
-    table.ip-table tr { page-break-inside: avoid; }
 
     ol.tnc { margin: 8px 0 0 18px; padding: 0; }
     ol.tnc li { font-size: 10px; line-height: 1.55; margin-bottom: 7px; text-align: justify; }
@@ -87,7 +86,7 @@
     .apt-type { font-weight: 800; font-size: 12px; margin: 22px 0 6px; }
 
     .unit-layout { border: 1px solid #333; padding: 8px; text-align: center; margin-bottom: 4px; }
-    .unit-layout img { display: block; max-width: 100%; max-height: 215mm; height: auto; margin: 0 auto; }
+    .unit-layout img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 
     .page-break { page-break-before: always; }
     .avoid-break { page-break-inside: avoid; }
@@ -892,8 +891,6 @@ function purchaserHtml(title, p) {
             '<div class="pbox-head">' + title + '</div>' +
             detailLine('Name', p.name) +
             detailLine(g + 'Name', p.guardianName) +
-            detailLine(g + 'License No. (For legal entities)', p.license) +
-            detailLine(g + 'Country of Incorporation', p.incorp) +
             detailLine(g + 'Nationality', p.nationality) +
             detailLine(g + 'Passport No', p.passport) +
             detailLine(g + 'P.O. Box / Postal Code', p.pobox) +
@@ -915,8 +912,6 @@ function purchaserHtml(title, p) {
       '<div class="col">' +
         '<div class="pbox-head">' + title + '</div>' +
         detailLine('Name', p.name) +
-        detailLine('License No. (For legal entities)', p.license) +
-        detailLine('Country of Incorporation', p.incorp) +
         detailLine('Nationality', p.nationality) +
         detailLine('Passport No', p.passport) +
         detailLine('P.O. Box / Postal Code', p.pobox) +
@@ -984,20 +979,7 @@ function companyHtml(title, c) {
                '</div><div class="pline">\u2014</div></div><div class="col"></div></div>';
     }
 
-    // UAE Incorporated = Yes  -> Authority Name + Free Zone / Main Land Company
-    // UAE Incorporated = No   -> Representative's Name + Passport No + Passport Exp. Date
-    // (unset -> neither group). Trade License + expiry always follow.
-    var details = '';
-    if (c.uaeIncorpId === '1355') {
-        details =
-            detailLine('Authority Name', c.authority) +
-            detailLine('Free Zone / Main Land Company', c.zone);
-    } else if (c.uaeIncorpId === '1357') {
-        details =
-            detailLine('Representative\u2019s Name', c.repName) +
-            detailLine('Representative\u2019s Passport No', c.repPassport) +
-            detailLine('Representative\u2019s Passport Exp. Date', c.repPassportExp);
-    }
+    // Authority, Representative and Trade License now always show (no Yes/No gating).
 
     return '' +
     '<div class="purchaser-box avoid-break">' +
@@ -1012,7 +994,10 @@ function companyHtml(title, c) {
       '</div>' +
       '<div class="col">' +
         detailLine('UAE Incorporated', c.uaeIncorp) +
-        details +
+        detailLine('Authority Name', c.authority) +
+        detailLine('Representative\u2019s Name', c.repName) +
+        detailLine('Representative\u2019s Passport No', c.repPassport) +
+        detailLine('Representative\u2019s Passport Exp. Date', c.repPassportExp) +
         detailLine('Trade License', c.license) +
         detailLine('Trade License Exp. Date', c.licenseExp) +
       '</div>' +
