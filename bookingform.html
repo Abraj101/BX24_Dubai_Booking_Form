@@ -159,6 +159,7 @@ const ZONE_MAP        = { '1359': 'Free Zone', '1361': 'Main Land Company' };
 
 // Product (catalog) property IDs
 const PROD_TYPE  = 177;   // Unit Type
+const PROD_UNITNO = 107;  // Unit No (property_107_text, e.g. "101")
 const PROD_SQFT  = 259;   // Total SqFt
 const PROD_FLOOR = 261;   // Floor
 const PLAN_PRICE_PROP = {  // plan -> price property id (fallback only)
@@ -339,6 +340,15 @@ function getProp(product, id) {
         return v;
     }
     return '';
+}
+// Like getProp, but prefers the property's *_text value (Unit No = property_107_text).
+function getPropText(product, id) {
+    if (!product) return '';
+    let v = product['property_' + id + '_text'];
+    if (v === undefined || v === null) v = product['property' + id + '_text'];
+    if (Array.isArray(v)) v = v[0];
+    if (v !== undefined && v !== null && v !== '') return v;
+    return getProp(product, id);
 }
 function ordinal(n) {
     const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
@@ -680,7 +690,7 @@ function buildData(deal, pj, plan, contacts, product, company, unitImage) {
     return {
         bookingNo: bookingNo,
         dateStr: fmtDate(today),
-        unit: window._unitName || (product ? getProp(product, 'name') : ''),
+        unit: getPropText(product, PROD_UNITNO) || window._unitName || (product ? getProp(product, 'name') : ''),
         type: product ? getProp(product, PROD_TYPE) : '',
         totalArea: product ? getProp(product, PROD_SQFT) : '',
         totalAreaSqM: product ? sqftToSqm(getProp(product, PROD_SQFT)) : '',
