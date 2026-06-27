@@ -939,6 +939,12 @@ function purchaserSectionsHtml(d) {
     }
 
     var list = (d.purchasers && d.purchasers.length) ? d.purchasers : [null];
+
+    // Number purchasers only when there is more than one (non-minor) purchaser
+    var purchaserCount = 0;
+    list.forEach(function(p) { if (!(p && p.isMinor)) purchaserCount++; });
+    var multi = purchaserCount > 1;
+
     var html = heading;
     var pnum = 0;
     var notePlaced = false;
@@ -947,7 +953,7 @@ function purchaserSectionsHtml(d) {
             html += purchaserHtml('Purchaser (Minor) Information', p);
         } else {
             pnum++;
-            html += purchaserHtml('Purchaser ' + pnum + ' Information', p);
+            html += purchaserHtml(multi ? ('Purchaser ' + pnum + ' Information') : 'Purchaser Information', p);
         }
         if (!notePlaced) { html += note; notePlaced = true; }   // primary-address note under first block
     });
