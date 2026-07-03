@@ -89,6 +89,13 @@
 
     .page-break { page-break-before: always; }
     .avoid-break { page-break-inside: avoid; }
+
+    /* Validation error panel */
+    .error-panel { padding: 26px 34px 40px; }
+    .error-panel .sec-title { color: #c62828; }
+    .error-panel .error-intro { font-size: 12px; margin-bottom: 12px; }
+    .error-panel ul.error-list { margin-left: 18px; font-size: 11.5px; line-height: 1.7; color: #c62828; }
+    .error-panel ul.error-list li { margin-bottom: 4px; }
 </style>
 </head>
 <body>
@@ -263,6 +270,49 @@ const TNC = [
 "This Offer to Purchase shall be governed by the laws of Dubai and the federal laws of the UAE. Disputes shall be referred to Dubai Courts. DIFC laws and DIFC Courts do not apply.",
 "All payments to the Vendor are exclusive of VAT. The Purchaser shall pay applicable VAT wherever required. Property sales in the UAE are generally not subject to VAT.",
 "The Vendor may freely assign this Offer to Purchase, or any part of it, to any of its affiliates, subsidiaries, or joint-venture partners without the Purchaser\u2019s consent."
+];
+
+/* ════════════════ VALIDATION FIELD LISTS ════════════════
+   These mirror exactly what purchaserHtml()/companyHtml() print on the SPA/booking
+   form. If any of these are blank, we refuse to render/attach and show why. */
+const REQUIRED_PURCHASER_FIELDS = [
+    { key: 'name',        label: 'Name' },
+    { key: 'nationality',  label: 'Nationality' },
+    { key: 'passport',     label: 'Passport No' },
+    { key: 'pobox',        label: 'P.O. Box / Postal Code' },
+    { key: 'city',         label: 'City' },
+    { key: 'country',      label: 'Country' },
+    { key: 'address',      label: 'Address' },
+    { key: 'mobile',       label: 'Mobile' },
+    { key: 'email',        label: 'Email' },
+    { key: 'uaeResident',  label: 'UAE Resident' }
+];
+const REQUIRED_GUARDIAN_FIELDS = [
+    { key: 'name',         label: 'Minor\u2019s Name' },
+    { key: 'guardianName', label: 'Guardian\u2019s Name' },
+    { key: 'nationality',  label: 'Guardian\u2019s Nationality' },
+    { key: 'passport',     label: 'Guardian\u2019s Passport No' },
+    { key: 'pobox',        label: 'Guardian\u2019s P.O. Box / Postal Code' },
+    { key: 'city',         label: 'Guardian\u2019s City' },
+    { key: 'country',      label: 'Guardian\u2019s Country' },
+    { key: 'address',      label: 'Guardian\u2019s Address' },
+    { key: 'mobile',       label: 'Guardian\u2019s Mobile' },
+    { key: 'email',        label: 'Guardian\u2019s Email' },
+    { key: 'uaeResident',  label: 'Guardian\u2019s UAE Resident' }
+];
+const REQUIRED_COMPANY_FIELDS = [
+    { key: 'name',           label: 'Company Name' },
+    { key: 'address',        label: 'Address' },
+    { key: 'city',           label: 'City' },
+    { key: 'country',        label: 'Country' },
+    { key: 'mobile',         label: 'Phone / Mobile' },
+    { key: 'email',          label: 'Email' },
+    { key: 'authority',      label: 'Authority Name' },
+    { key: 'repName',        label: 'Representative\u2019s Name' },
+    { key: 'repPassport',    label: 'Representative\u2019s Passport No' },
+    { key: 'repPassportExp', label: 'Representative\u2019s Passport Exp. Date' },
+    { key: 'license',        label: 'Trade License' },
+    { key: 'licenseExp',     label: 'Trade License Exp. Date' }
 ];
 
 /* ════════════════ STATE ════════════════ */
@@ -455,6 +505,83 @@ BX24.init(function() {
     });
 });
 
+/* ════════════════ VALIDATION ════════════════
+   Runs BEFORE buildData()/renderForm(). If it returns any errors, the booking
+   form is NOT generated — an error panel is shown instead and the Attach
+   button stays disabled. */
+function validateBookingData(dealContactItems, contacts, productRows, product, pj, company) {
+    const errors = [];
+
+    // 1) Contacts — crm.deal.contact.items.get must have returned at least one
+    //    linked contact, and (for an individual/minor purchase) each loaded
+    //    contact must carry every field the booking form/SPA prints.
+    if (!Array.isArray(dealContactItems) || dealContactItems.length === 0) {
+        errors.push('No contacts are linked to this deal (crm.deal.contact.items.get returned no rows). Add at least one Purchaser contact to the deal.');
+    }
+
+    if (company) {
+        REQUIRED_COMPANY_FIELDS.forEach(function(f) {
+            if (!company[f.key]) {
+                errors.push('Purchaser (Company): missing required field "' + f.label + '".');
+            }
+        });
+    } else if (Array.isArray(dealContactItems) && dealContactItems.length > 0) {
+        if (!contacts.length) {
+            errors.push('The contact(s) linked to this deal could not be loaded via crm.contact.get.');
+        }
+        let purchaserSeq = 0;
+        contacts.forEach(function(c) {
+            const p = contactToPurchaser(c);
+            const isMinor = p.isMinor;
+            const fieldList = isMinor ? REQUIRED_GUARDIAN_FIELDS : REQUIRED_PURCHASER_FIELDS;
+            let label;
+            if (isMinor) {
+                label = 'Purchaser (Minor' + (p.name ? ' — ' + p.name : '') + ')';
+            } else {
+                purchaserSeq++;
+                label = 'Purchaser ' + purchaserSeq + (p.name ? ' (' + p.name + ')' : '');
+            }
+            fieldList.forEach(function(f) {
+                if (!p[f.key]) {
+                    errors.push(label + ': missing required field "' + f.label + '".');
+                }
+            });
+        });
+    }
+
+    // 2) Product row — crm.deal.productrows.get must return at least one row,
+    //    and the catalog product behind it must actually load.
+    if (!Array.isArray(productRows) || productRows.length === 0) {
+        errors.push('No product row found on the deal (crm.deal.productrows.get returned no rows). Add the unit as a product on the deal.');
+    } else if (!product) {
+        errors.push('A product row exists (PRODUCT_ID ' + productRows[0].PRODUCT_ID + ') but its catalog details could not be loaded via catalog.product.get.');
+    }
+
+    // 3) Payment-plan JSON field — must parse and must specify a paymentPlan.
+    if (!pj || typeof pj !== 'object' || Object.keys(pj).length === 0) {
+        errors.push('The payment plan field (' + JSON_FIELD + ') is empty or not valid JSON.');
+    } else if (!pj.paymentPlan) {
+        errors.push('The payment plan field (' + JSON_FIELD + ') does not specify a "paymentPlan" value.');
+    }
+
+    return errors;
+}
+
+function showErrors(errors) {
+    const html = '' +
+        '<div class="error-panel">' +
+          '<div class="sec-title">Cannot Generate Booking Form</div>' +
+          '<div class="error-intro">The following required information is missing or invalid. Please fix it on the deal / contact(s) / product and reload this form:</div>' +
+          '<ul class="error-list">' +
+            errors.map(function(e) { return '<li>' + esc(e) + '</li>'; }).join('') +
+          '</ul>' +
+        '</div>';
+    document.getElementById('formRoot').innerHTML = html;
+    document.getElementById('attachBtn').disabled = true;
+    setStatus(errors.length + ' issue(s) found — booking form was not generated.', true);
+    notifyResize();
+}
+
 async function loadAll() {
     setStatus('Loading deal…');
 
@@ -468,7 +595,9 @@ async function loadAll() {
     const plan = pj.paymentPlan || '';
 
     // 3) Contacts on the deal -> Purchaser 1 / Purchaser 2
-    const contacts = await loadContacts();
+    const contactData = await loadContacts();
+    const dealContactItems = contactData.items;
+    const contacts = contactData.contacts;
 
     // 3b) Company (when the purchaser is a company rather than individuals)
     let company = null;
@@ -480,16 +609,18 @@ async function loadAll() {
             await loadCompanyEnums();   // id->label maps for company list fields (Country, …)
         } catch (e) { console.warn('[BookingForm] company load failed:', e); }
     }
+    const companyObj = company ? companyToObj(company) : null;
 
     // 4) Product (unit) from the first product row
     let product = null;
     let unitImage = '';
+    let productRows = [];
     try {
         const rowsData = await callBX('crm.deal.productrows.get', { id: currentDealId });
-        const rows = Array.isArray(rowsData) ? rowsData : (rowsData.result || []);
-        if (rows.length) {
-            window._unitName = rows[0].PRODUCT_NAME || '';
-            const pid = rows[0].PRODUCT_ID;
+        productRows = Array.isArray(rowsData) ? rowsData : (rowsData.result || []);
+        if (productRows.length) {
+            window._unitName = productRows[0].PRODUCT_NAME || '';
+            const pid = productRows[0].PRODUCT_ID;
             if (pid) {
                 const pd = await callBX('catalog.product.get', { id: pid });
                 product = (pd && pd.product) ? pd.product : pd;
@@ -501,7 +632,14 @@ async function loadAll() {
         }
     } catch (e) { console.warn('[BookingForm] product load failed (check catalog scope on this app):', e); }
 
-    // 5) Assemble + render
+    // 5) Validate BEFORE rendering — if anything required is missing, stop here.
+    const errors = validateBookingData(dealContactItems, contacts, productRows, product, pj, companyObj);
+    if (errors.length) {
+        showErrors(errors);
+        return;
+    }
+
+    // 6) Assemble + render
     const data = buildData(deal, pj, plan, contacts, product, company, unitImage);
     renderForm(data);
     document.getElementById('attachBtn').disabled = false;
@@ -610,7 +748,7 @@ async function loadContacts() {
         } catch (e) { console.warn('[BookingForm] contact', cid, e); }
     }
     loaded.sort(function(a, b) { return a.__order - b.__order; });
-    return loaded;
+    return { items: items, contacts: loaded };
 }
 
 function contactToPurchaser(c) {
