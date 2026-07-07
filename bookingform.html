@@ -864,7 +864,7 @@ function baseSchedule(plan, pj, booking, netPayable) {
     }
     
 
-    const completion = (plan === '3_years')
+    const completion = (plan === '60_40')
     ? new Date(2028, 5, 30) 
     : addMonths(booking, HANDOVER_MONTHS);
 
