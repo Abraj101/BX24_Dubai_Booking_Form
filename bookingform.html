@@ -1022,7 +1022,7 @@ function applyBalloons(rows, pj) {
     // }
 
     function brow(b, dateStr, ts) {
-        return { label: 'Balloon Payment', pct: '', amount: round2(b.amount),
+        return { label: 'Balloon Payment', pct: net > 0 ? round2(b.amount / net * 100) : '', amount: round2(b.amount),
                  dateStr: dateStr, ts: ts, locked: true, instNo: null, balloon: true };
     }
 
