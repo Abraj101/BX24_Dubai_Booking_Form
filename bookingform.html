@@ -994,7 +994,7 @@ function buildCustomSchedule(pj, net) {
    (custom keeps its fixed phase order — Downpayment → During Construction →
    On Possession → Post Handover — since those dates are already in order). */
 function buildSchedule(plan, pj, booking, net) {
-    const rows = applyBalloons(baseSchedule(plan, pj, booking, net), pj);
+    const rows = applyBalloons(baseSchedule(plan, pj, booking, net), pj, net);
     if (plan === 'custom') return rows;
     return rows
         .map(function(r, i) { r._i = i; return r; })
@@ -1007,7 +1007,7 @@ function buildSchedule(plan, pj, booking, net) {
 
 // Balloons reduce the non-locked installment pool proportionally (per plan %),
 // then appear as their own row (no %) after the installment at their position.
-function applyBalloons(rows, pj) {
+function applyBalloons(rows, pj, net) {
     const balloons = (Array.isArray(pj.balloonPayments) ? pj.balloonPayments : [])
         .map(function(b) { return { position: parseInt(b.position, 10), amount: toNumber(b.amount) }; })
         .filter(function(b) { return b.amount > 0; });
