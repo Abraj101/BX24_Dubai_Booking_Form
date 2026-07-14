@@ -1013,13 +1013,13 @@ function applyBalloons(rows, pj) {
         .filter(function(b) { return b.amount > 0; });
     if (!balloons.length) return rows;
 
-    const poolBase     = rows.reduce(function(a, r) { return a + (r.locked ? 0 : r.amount); }, 0);
-    const balloonTotal = balloons.reduce(function(a, b) { return a + b.amount; }, 0);
+    // const poolBase     = rows.reduce(function(a, r) { return a + (r.locked ? 0 : r.amount); }, 0);
+    // const balloonTotal = balloons.reduce(function(a, b) { return a + b.amount; }, 0);
 
-    if (poolBase > 0) {
-        const scale = Math.max(0, poolBase - balloonTotal) / poolBase;
-        rows.forEach(function(r) { if (!r.locked) r.amount = round2(r.amount * scale); });
-    }
+    // if (poolBase > 0) {
+    //     const scale = Math.max(0, poolBase - balloonTotal) / poolBase;
+    //     rows.forEach(function(r) { if (!r.locked) r.amount = round2(r.amount * scale); });
+    // }
 
     function brow(b, dateStr, ts) {
         return { label: 'Balloon Payment', pct: '', amount: round2(b.amount),
