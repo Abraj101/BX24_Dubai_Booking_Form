@@ -902,12 +902,22 @@ function baseSchedule(plan, pj, booking, netPayable) {
 // On Possession + Post Handover installments. Installment numbers run CONTINUOUSLY across
 // both installment phases; Downpayment and On Possession are unnumbered (locked) rows.
 function buildCustomSchedule(pj, net) {
+
+   console.log('%c[buildCustomSchedule] ── START ──', 'color:#2fa36b;font-weight:bold');
+    console.log('[buildCustomSchedule] input pj =', pj);
+    console.log('[buildCustomSchedule] input net (purchase price) =', net);
+
+
+
     const freqMap = { monthly: 1, quarterly: 3, biannually: 6, annually: 12 };
     const pctOf = function(amt) { return net > 0 ? round2(amt / net * 100) : 0; };
 
     const dp  = toNumber(pj.downpaymentPct);
     const dc  = toNumber(pj.duringConstructionPct);
     const pos = toNumber(pj.possessionPct);
+
+    console.log('[buildCustomSchedule] dp% =', dp, ' dc% =', dc, ' pos% =', pos,
+                ' → sum of named phases =', dp + dc + pos, '%');
 
     const dpDate  = pj.downpaymentDate ? new Date(pj.downpaymentDate) : new Date();
     const posDate = pj.possessionDate ? new Date(pj.possessionDate) : null;
@@ -918,10 +928,23 @@ function buildCustomSchedule(pj, net) {
     const dcF = freqMap[pj.duringConstructionFreq] || 1;
     const phF = freqMap[pj.postHandoverFreq] || 1;
 
+    console.log('[buildCustomSchedule] pj.duringConstructionPayments (raw) =', JSON.stringify(pj.duringConstructionPayments), ' → dcN =', dcN);
+    console.log('[buildCustomSchedule] pj.postHandoverPayments (raw) =', JSON.stringify(pj.postHandoverPayments), ' → phN =', phN);
+
     const dpAmt  = round2(net * dp / 100);
     const dcTot  = round2(net * dc / 100);
     const posAmt = round2(net * pos / 100);
     const phTot  = round2(net - dpAmt - dcTot - posAmt);   // remainder closes the plan to 100%
+
+    console.log('%c[buildCustomSchedule] ── PHASE TOTALS ──', 'color:#2fa36b;font-weight:bold');
+    console.table({
+        'Downpayment (dpAmt)':        { pct: dp,  amount: dpAmt },
+        'During Construction (dcTot)': { pct: dc,  amount: dcTot },
+        'On Possession (posAmt)':      { pct: pos, amount: posAmt },
+        'Post Handover (phTot, residual)': { pct: round2(100 - dp - dc - pos), amount: phTot }
+    });
+    console.log('[buildCustomSchedule] Check: dpAmt + dcTot + posAmt + phTot =',
+                round2(dpAmt + dcTot + posAmt + phTot), ' (should equal net =', net, ')');
 
     function split(total, count) {
         const arr = []; let acc = 0; const each = count > 0 ? round2(total / count) : 0;
