@@ -896,6 +896,7 @@ function baseSchedule(plan, pj, booking, netPayable) {
                   locked: true, instNo: null }];
     }
     if (plan === 'custom') return buildCustomSchedule(pj, netPayable);
+    if (plan === 'custom-2') return buildCustom02Schedule(pj, netPayable);
     // unknown plan: leave empty (table shows a note)
     return [];
 }
@@ -992,12 +993,40 @@ function buildCustomSchedule(pj, net) {
     return rows;
 }
 
+function buildCustom02Schedule(pj, net) {
+    const rows = Array.isArray(pj.rows) ? pj.rows : [];
+    let instNo = 0;
+
+    return rows.map(function(r) {
+        const type = r.installment || '';
+        const pct = (r.percentage !== undefined && r.percentage !== '') ? toNumber(r.percentage) : '';
+        const amount = toNumber(r.amount);
+        const d = r.paymentDate ? new Date(r.paymentDate) : null;
+        const validDate = d && !isNaN(d.getTime());
+        const dateStr = validDate ? fmtDate(d) : '\u2014';
+        const ts = validDate ? d.getTime() : null;
+
+        if (type === 'down_payment') {
+            return { label: 'Downpayment', pct: pct, amount: amount,
+                      dateStr: dateStr, ts: ts, locked: true, instNo: null };
+        }
+        if (type === 'balloon_payment') {
+            return { label: 'Balloon Payment', pct: pct, amount: amount,
+                      dateStr: dateStr, ts: ts, locked: true, instNo: null, balloon: true };
+        }
+        // 'installment' (or unset) — numbered sequentially as they appear
+        instNo++;
+        return { label: ordinal(instNo) + ' Installment', pct: pct, amount: amount,
+                  dateStr: dateStr, ts: ts, locked: false, instNo: instNo };
+    });
+}
+
 /* Wrap the base schedule, apply balloons, then order rows by payment date
    (custom keeps its fixed phase order — Downpayment → During Construction →
    On Possession → Post Handover — since those dates are already in order). */
 function buildSchedule(plan, pj, booking, net) {
     const rows = applyBalloons(baseSchedule(plan, pj, booking, net), pj, net);
-    if (plan === 'custom') return rows;
+    if (plan === 'custom' || plan === 'custom-2') return rows;
     return rows
         .map(function(r, i) { r._i = i; return r; })
         .sort(function(a, b) {
