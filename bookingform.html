@@ -1131,8 +1131,8 @@ function purchaserSectionsHtml(d) {
             pnum++;
             html += purchaserHtml(multi ? ('Purchaser ' + pnum + ' Information') : 'Purchaser Information', p);
         }
-        if (!notePlaced) { html += note; notePlaced = true; }   // primary-address note under first block
     });
+    html += note;
     return html;
 }
 
