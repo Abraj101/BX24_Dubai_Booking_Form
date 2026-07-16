@@ -141,6 +141,7 @@ const C_COUNTRY     = 'UF_CRM_1782082896172';   // now a dropdown (list) field
 const C_INCORP      = 'UF_CRM_1781458599043';
 const C_UAE_RESIDENT = 'UF_CRM_1781640051215';      // dropdown: Yes (1289) / No (1291)
 const UAE_RESIDENT_MAP = { '1289': 'Yes', '1291': 'No' };
+const C_OWNERSHIP_PCT = 'UF_CRM_1782163950371'; 
 
 // Contact Type dropdown now includes a "Minor" option. When selected, the section
 // is labelled "Minor" and the remaining fields describe the Guardian.
@@ -761,6 +762,7 @@ function contactToPurchaser(c) {
         guardianName: getUF(c, C_GUARDIAN_NAME),
         license:     getUF(c, C_LICENSE),
         incorp:      getUF(c, C_INCORP),
+        ownershipPct: getUF(c, C_OWNERSHIP_PCT),
         nationality: resolveContactEnum(C_NATIONALITY, getUF(c, C_NATIONALITY)),
         passport:    getUF(c, C_PASSPORT),
         pobox:       getUF(c, C_POBOX),
@@ -1050,7 +1052,7 @@ function applyBalloons(rows, pj, net) {
 }
 
 /* ════════════════ RENDER ════════════════ */
-function purchaserHtml(title, p) {
+function purchaserHtml(title, p, multi) {
     if (!p) {
         return '<div class="purchaser-box"><div class="col"><div class="pbox-head">' + title +
                '</div><div class="pline">\u2014</div></div><div class="col"></div></div>';
@@ -1065,6 +1067,7 @@ function purchaserHtml(title, p) {
           '<div class="col">' +
             '<div class="pbox-head">' + title + '</div>' +
             detailLine('Name', p.name) +
+            (multi ? detailLine('Ownership %', p.ownershipPct) : '') +
             detailLine(g + 'Name', p.guardianName) +
             detailLine(g + 'Nationality', p.nationality) +
             detailLine(g + 'Passport No', p.passport) +
@@ -1087,6 +1090,7 @@ function purchaserHtml(title, p) {
       '<div class="col">' +
         '<div class="pbox-head">' + title + '</div>' +
         detailLine('Name', p.name) +
+        (multi ? detailLine('Ownership %', p.ownershipPct) : '') +
         detailLine('Nationality', p.nationality) +
         detailLine('Passport No', p.passport) +
         detailLine('P.O. Box / Postal Code', p.pobox) +
@@ -1126,10 +1130,10 @@ function purchaserSectionsHtml(d) {
     var notePlaced = false;
     list.forEach(function(p) {
         if (p && p.isMinor) {
-            html += purchaserHtml('Purchaser (Minor) Information', p);
+            html += purchaserHtml('Purchaser (Minor) Information', p, multi);
         } else {
             pnum++;
-            html += purchaserHtml(multi ? ('Purchaser ' + pnum + ' Information') : 'Purchaser Information', p);
+            html += purchaserHtml(multi ? ('Purchaser ' + pnum + ' Information') : 'Purchaser Information', p, multi);
         }
     });
     html += note;
