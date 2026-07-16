@@ -1067,7 +1067,7 @@ function purchaserHtml(title, p, multi) {
           '<div class="col">' +
             '<div class="pbox-head">' + title + '</div>' +
             detailLine('Name', p.name) +
-            (multi ? detailLine('Ownership %', p.ownershipPct) : '') +
+            (detailLine('Ownership %', p.ownershipPct)) +
             detailLine(g + 'Name', p.guardianName) +
             detailLine(g + 'Nationality', p.nationality) +
             detailLine(g + 'Passport No', p.passport) +
@@ -1090,7 +1090,7 @@ function purchaserHtml(title, p, multi) {
       '<div class="col">' +
         '<div class="pbox-head">' + title + '</div>' +
         detailLine('Name', p.name) +
-        (multi ? detailLine('Ownership %', p.ownershipPct) : '') +
+        (detailLine('Ownership %', p.ownershipPct)) +
         detailLine('Nationality', p.nationality) +
         detailLine('Passport No', p.passport) +
         detailLine('P.O. Box / Postal Code', p.pobox) +
