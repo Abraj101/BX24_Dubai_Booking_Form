@@ -516,8 +516,10 @@ function validateBookingData(dealContactItems, contacts, productRows, product, p
     // 1) Contacts — crm.deal.contact.items.get must have returned at least one
     //    linked contact, and (for an individual/minor purchase) each loaded
     //    contact must carry every field the booking form/SPA prints.
-    if (!Array.isArray(dealContactItems) || dealContactItems.length === 0) {
-        errors.push('No contacts are linked to this deal (crm.deal.contact.items.get returned no rows). Add at least one Purchaser contact to the deal.');
+    const hasContacts = Array.isArray(dealContactItems) && dealContactItems.length > 0;
+    const hasCompany = !!company;
+    if (!hasContacts && !hasCompany) {
+        errors.push('No contacts are linked to this deal and no Company is set on the deal (crm.deal.contact.items.get returned no rows). Add at least one Purchaser contact, or set a Company as the purchaser.');
     }
 
     if (company) {
@@ -526,7 +528,7 @@ function validateBookingData(dealContactItems, contacts, productRows, product, p
                 errors.push('Purchaser (Company): missing required field "' + f.label + '".');
             }
         });
-    } else if (Array.isArray(dealContactItems) && dealContactItems.length > 0) {
+    } else if (hasContacts) {
         if (!contacts.length) {
             errors.push('The contact(s) linked to this deal could not be loaded via crm.contact.get.');
         }
