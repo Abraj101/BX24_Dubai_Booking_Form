@@ -123,6 +123,7 @@ const IMAGE_PROXY = '/image-proxy?url=';
 
 // Deal fields — Agents Information
 const F_AGENT_ASSISTED = 'UF_CRM_1781459668675';
+const F_BOOKING_DATE = 'UF_CRM_1785727632159'; 
 const F_AGENCY_NAME    = 'UF_CRM_1781459681223';
 const F_AGENT_REP      = 'UF_CRM_1781459701649';
 // "Assisted by a registered agent" dropdown: Yes (1275) / No (1277)
@@ -360,6 +361,15 @@ function addMonths(date, m) {
     d.setMonth(d.getMonth() + m);
     if (d.getDate() < day) d.setDate(0); // clamp month-end
     return d;
+}
+
+function parseBXDate(raw) {
+    if (!raw) return null;
+    const s = String(raw);
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
 }
 
 // Multi-value fields (PHONE / EMAIL) -> first value
@@ -806,6 +816,8 @@ function buildData(deal, pj, plan, contacts, product, company, unitImage) {
     const today = new Date();
     const discPct = toNumber(pj.discountPct);
 
+    const formDate = parseBXDate(getUF(deal, F_BOOKING_DATE))
+
     // Net payable = the deal Amount (Amount and Currency); already discounted by Payment Details
     let netPayable = toNumber(deal.OPPORTUNITY);
     if (!netPayable) {
@@ -831,7 +843,7 @@ function buildData(deal, pj, plan, contacts, product, company, unitImage) {
 
     return {
         bookingNo: bookingNo,
-        dateStr: fmtDate(today),
+        dateStr: fmtDate(formDate) || '',
         unit: getPropText(product, PROD_UNITNO) || window._unitName || (product ? getProp(product, 'name') : ''),
         type: product ? getProp(product, PROD_TYPE) : '',
         totalArea: product ? getProp(product, PROD_SQFT) : '',
