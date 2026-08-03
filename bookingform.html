@@ -843,7 +843,7 @@ function buildData(deal, pj, plan, contacts, product, company, unitImage) {
 
     return {
         bookingNo: bookingNo,
-        dateStr: fmtDate(formDate) || '',
+        dateStr:  formDate ? fmtDate(formDate) : '',
         unit: getPropText(product, PROD_UNITNO) || window._unitName || (product ? getProp(product, 'name') : ''),
         type: product ? getProp(product, PROD_TYPE) : '',
         totalArea: product ? getProp(product, PROD_SQFT) : '',
