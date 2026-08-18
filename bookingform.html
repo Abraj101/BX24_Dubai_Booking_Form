@@ -1393,16 +1393,28 @@ async function attachToDeal() {
         btn.textContent = 'Attaching…';
         setStatus('Uploading to the deal…');
 
-        const fields = {};
-        fields[BOOKING_FILE_FIELD] = { fileData: [filename, data.base64] };
-        await callBX('crm.deal.update', { id: currentDealId, fields: fields });
+        const setResp = await fetch('https://bx24paymentfieldbackend.pcirealestate.com/setPaymentField', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                dealId: currentDealId,
+                fieldId: BOOKING_FILE_FIELD,
+                content: { fileName: filename, fileContent: data.base64 }
+            })
+        });
+        const setData = await setResp.json().catch(function() { return null; });
+        if (!setResp.ok || !setData || !setData.success) {
+            const errMsg = (setData && (setData.message || (setData.error && JSON.stringify(setData.error)))) ||
+                           ('HTTP ' + setResp.status);
+            throw new Error('setPaymentField failed: ' + errMsg);
+        }
 
         setStatus('\u2713 Attached to the Booking Form field on the General tab.');
         btn.textContent = 'Attached \u2713';
         setTimeout(function() { btn.disabled = false; btn.textContent = 'Attach to Deal'; }, 2500);
     } catch (e) {
         console.error('[BookingForm] attach error:', e);
-        setStatus('Attach failed (see console).', true);
+        setStatus('Attach failed: ' + (e && e.message ? e.message : 'see console.'), true);
         btn.disabled = false; btn.textContent = 'Attach to Deal';
     }
 }
