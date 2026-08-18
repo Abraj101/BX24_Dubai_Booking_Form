@@ -1399,7 +1399,7 @@ async function attachToDeal() {
             body: JSON.stringify({
                 dealId: currentDealId,
                 fields: {
-                    [BOOKING_FILE_FIELD]: [filename, data.base64]
+                    [BOOKING_FILE_FIELD]: { fileData: [filename, data.base64] }
                 }
             })
         });
@@ -1408,6 +1408,15 @@ async function attachToDeal() {
             const errMsg = (updateData && (updateData.error || (updateData.details && JSON.stringify(updateData.details)))) ||
                            ('HTTP ' + updateResp.status);
             throw new Error('updateDeal failed: ' + errMsg);
+        }
+
+        // Bitrix can report success while silently dropping a malformed field value,
+        // so re-fetch the deal and confirm the file field actually landed.
+        setStatus('Verifying attachment\u2026');
+        const verifyRes = await callBX('crm.deal.get', { id: currentDealId });
+        const verifyDeal = verifyRes.result ? verifyRes.result : verifyRes;
+        if (!verifyDeal || !verifyDeal[BOOKING_FILE_FIELD]) {
+            throw new Error('Server reported success, but the file field is still empty on the deal.');
         }
 
         setStatus('\u2713 Attached to the Booking Form field on the General tab.');
