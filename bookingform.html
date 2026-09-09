@@ -267,56 +267,71 @@ const TNC = [
    product's Project property (id 173) value. To add a new project: add an entry
    here, plus its letterhead PNG in the repo root \u2014 nothing else in this file or
    server.js needs to change. */
-const PROJECTS = {
-    'South Lofts': {
-        vendor: 'PCI Real Estate Developers LLC',
-        project: 'South Lofts by Premier Choice',
-        location: 'Plot 43, Saih Shuaib 2, Dubai',
-        building: 'South Lofts 1',
-        headerImage: 'bf_header.png',
-        fees: {
-            admin: 5250,          // AED flat
-            dldRate: 0.04,        // 4% of purchase price (shown separately, NOT added to total)
-            furnished: 25000,     // AED, shown when Furnished is turned on
-            privatePool: 100000   // AED, shown when Private Pool is turned on
+const SOUTH_LOFTS_CFG = {
+    vendor: 'PCI Real Estate Developers LLC',
+    project: 'South Lofts by Premier Choice',
+    location: 'Plot 43, Saih Shuaib 2, Dubai',
+    building: 'South Lofts 1',
+    headerImage: 'bf_header.png',
+    fees: {
+        admin: 5250,          // AED flat
+        dldRate: 0.04,        // 4% of purchase price (shown separately, NOT added to total)
+        furnished: 25000,     // AED, shown when Furnished is turned on
+        privatePool: 100000   // AED, shown when Private Pool is turned on
+    },
+    catalogProps: {
+        type: 177,    // Unit Type
+        unitNo: 107,  // Unit No (property_107_text, e.g. "101")
+        sqft: 259,    // Total SqFt
+        floor: 261,   // Floor
+        planPrice: { '60_40': 263, '3_years': 265, '5_years': 267, 'full_payment': 269 }
+    },
+    completionDate: '2028-06-30', // fixed handover date used by 60_40 / 3_years / 5_years plans
+    schedules: SCHEDULES,
+    tnc: TNC,
+    bank: {
+        booking: {
+            bank: 'ENBD',
+            title: 'South Lofts by Premier Choice-Escrow Account',
+            acctNo: '0205959438202',
+            iban: 'AE740260000205959438202',
+            swift: 'EBILAEAD',
+            branch: 'NAD AL SHEEBA DUBAI'
         },
-        catalogProps: {
-            type: 177,    // Unit Type
-            unitNo: 107,  // Unit No (property_107_text, e.g. "101")
-            sqft: 259,    // Total SqFt
-            floor: 261,   // Floor
-            planPrice: { '60_40': 263, '3_years': 265, '5_years': 267, 'full_payment': 269 }
-        },
-        completionDate: '2028-06-30', // fixed handover date used by 60_40 / 3_years / 5_years plans
-        schedules: SCHEDULES,
-        tnc: TNC,
-        bank: {
-            booking: {
-                bank: 'ENBD',
-                title: 'South Lofts by Premier Choice-Escrow Account',
-                acctNo: '0205959438202',
-                iban: 'AE740260000205959438202',
-                swift: 'EBILAEAD',
-                branch: 'NAD AL SHEEBA DUBAI'
-            },
-            dldAdmin: {
-                bank: 'ABU DHABI COMMERCIAL BANK',
-                title: 'PCI REAL ESTATE DEVELOPERS LLC',
-                iban: 'AE770030010031001994462',
-                swift: 'ADCBAEAA'
-            }
+        dldAdmin: {
+            bank: 'ABU DHABI COMMERCIAL BANK',
+            title: 'PCI REAL ESTATE DEVELOPERS LLC',
+            iban: 'AE770030010031001994462',
+            swift: 'ADCBAEAA'
         }
     }
+};
 
-    // Add new projects here once their details are confirmed, e.g.:
-    // 'Gateway': {
-    //     vendor: '...', project: '...', location: '...', building: '...',
-    //     headerImage: 'gateway_header.png',
-    //     fees: { admin: ..., dldRate: ..., furnished: ..., privatePool: ... },
-    //     catalogProps: { type: ..., unitNo: ..., sqft: ..., floor: ..., planPrice: {...} },
-    //     completionDate: '...', schedules: SCHEDULES /* or its own */, tnc: TNC /* or its own */,
-    //     bank: { booking: {...}, dldAdmin: {...} }
-    // }
+/* ⚠️ DRAFT CONFIG — FOR INTERNAL REVIEW/PRINTING ONLY, NOT FINAL.
+   Only the fields explicitly listed below (project name, letterhead, catalog property
+   IDs) are confirmed Gateway values. Everything else (vendor, location, building,
+   fees, bank accounts, completion date, schedules, T&Cs) is copied verbatim from
+   South Lofts as a placeholder so the form can be generated and printed for review.
+   Do NOT attach a Gateway booking form produced with this config to a real customer
+   deal until every "borrowed from South Lofts" field below has been replaced with
+   Gateway's real data and this warning is removed. */
+const GATEWAY_CFG = Object.assign({}, SOUTH_LOFTS_CFG, {
+    project: 'Gateway by Premier Choice',
+    headerImage: 'gateway_header.png',
+    catalogProps: {
+        type: 159,    // Unit Type — confirmed Gateway-specific property
+        unitNo: 107,  // Unit No — confirmed shared with South Lofts
+        sqft: 259,    // Total SqFt — confirmed shared with South Lofts
+        floor: 99,    // Floor — confirmed Gateway-specific property
+        planPrice: { '60_40': 263, '3_years': 265, '5_years': 267, 'full_payment': 269 } // confirmed shared
+    }
+    // Borrowed from South Lofts, NOT yet confirmed for Gateway:
+    //   vendor, location, building, fees, completionDate, schedules, tnc, bank
+});
+
+const PROJECTS = {
+    'South Lofts': SOUTH_LOFTS_CFG,
+    'Gateway': GATEWAY_CFG
 };
 
 /* ════════════════ VALIDATION FIELD LISTS ════════════════
