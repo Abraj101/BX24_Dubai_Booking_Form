@@ -50,19 +50,31 @@ function fileDataUrl(file, mime) {
     } catch (e) { return ''; }
 }
 
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+}
+
 // ── Server-side PDF rendering with headless Chrome ──
 // Receives the fully-rendered booking-form HTML (CSS + body, unit image inlined),
-// renders it with real Chrome pagination, and adds the bf_header.png running header
-// plus the page-number / signature footer on every page.
+// renders it with real Chrome pagination, and adds the project's letterhead as a
+// running header plus the page-number / signature footer on every page.
 app.post('/render-pdf', async (req, res) => {
-    let { html } = req.body || {};
+    let { html, headerImage, projectLabel } = req.body || {};
     if (!html) return res.status(400).json({ error: 'missing html' });
 
     // The letterhead is a running header now, so drop the in-body copy to avoid
     // showing it twice on page 1.
     html = html.replace(/<div class="bf-header">[\s\S]*?<\/div>/, '');
 
-    const header = fileDataUrl('bf_header.png', 'image/png');
+    // headerImage is client-supplied (from the booking form's per-project config), so
+    // it's validated against a strict filename pattern + on-disk existence before use
+    // — never trust it as a raw path.
+    const safeHeaderImage = (typeof headerImage === 'string' && /^[A-Za-z0-9_-]+\.png$/.test(headerImage)
+        && fs.existsSync(path.join(__dirname, headerImage))) ? headerImage : 'bf_header.png';
+    const header = fileDataUrl(safeHeaderImage, 'image/png');
+    const footerLabel = escapeHtml(projectLabel || 'South Lofts');
 
     let browser;
     try {
@@ -84,10 +96,10 @@ app.post('/render-pdf', async (req, res) => {
               (header ? '<img src="' + header + '" style="display:block; width:100%; max-height:24mm; object-fit:contain;">' : '') +
             '</div>';
 
-        // Footer: left = Page N | South Lofts ; right = Signed by Purchaser + line.
+        // Footer: left = Page N | <project> ; right = Signed by Purchaser + line.
         const footerTemplate =
             '<div style="width:100%; box-sizing:border-box; padding:0 8mm; font-family:Arial,sans-serif; font-size:9px; color:#333; display:flex; justify-content:space-between; align-items:flex-end;">' +
-              '<span>Page <span class="pageNumber"></span> | South Lofts</span>' +
+              '<span>Page <span class="pageNumber"></span> | ' + footerLabel + '</span>' +
               '<span>Signed by Purchaser&nbsp;________________________</span>' +
             '</div>';
 

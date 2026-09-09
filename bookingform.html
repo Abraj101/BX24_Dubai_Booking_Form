@@ -166,29 +166,17 @@ const CO_REP_NAME     = 'UF_CRM_1782068252765';   // Representative name (not UA
 const UAE_INCORP_MAP  = { '1355': 'Yes', '1357': 'No' };
 const ZONE_MAP        = { '1359': 'Free Zone', '1361': 'Main Land Company' };
 
-// Product (catalog) property IDs
-const PROD_TYPE  = 177;   // Unit Type
-const PROD_UNITNO = 107;  // Unit No (property_107_text, e.g. "101")
-const PROD_SQFT  = 259;   // Total SqFt
-const PROD_FLOOR = 261;   // Floor
-const PLAN_PRICE_PROP = {  // plan -> price property id (fallback only)
-    '60_40': 263, '3_years': 265, '5_years': 267, 'full_payment': 269
-};
+// Catalog property that identifies which project a unit belongs to (List property
+// "Project" on the catalog product — e.g. value "South Lofts" / "Gateway"). See
+// PROJECTS below for everything that's configured per project.
+const PROJECT_PROPERTY_ID = 173;
 
-// Static project details (same for every South Lofts deal)
-const VENDOR   = 'PCI Real Estate Developers LLC';
-const PROJECT  = 'South Lofts by Premier Choice';
-const LOCATION = 'Plot 43, Saih Shuaib 2, Dubai';
-const BUILDING = 'South Lofts 1';
+// Fallback project key for units with no Property 173 value set (catalog records
+// created before multi-project support existed).
+const DEFAULT_PROJECT_KEY = 'South Lofts';
 
-// Fees
-const ADMIN_FEE   = 5250;   // AED flat
-const DLD_RATE    = 0.04;   // 4% of purchase price (shown separately, NOT added to total)
-const FURNISHED_FEE = 25000; // AED, shown when Furnished is turned on
-const PRIVATE_POOL_FEE = 100000; // AED, shown when Private Pool is turned on
-
-// Completion / handover assumption: completion = booking date + this many months.
-// The filled template uses 24 months. Change here if a handover-date field is added.
+// Completion / handover assumption when a project doesn't set its own completionDate:
+// completion = booking date + this many months.
 const HANDOVER_MONTHS = 24;
 
 /* ════════════════ INSTALLMENT SCHEDULES ════════════════
@@ -274,6 +262,63 @@ const TNC = [
 "The Vendor may freely assign this Offer to Purchase, or any part of it, to any of its affiliates, subsidiaries, or joint-venture partners without the Purchaser\u2019s consent."
 ];
 
+/* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 PROJECT CONFIGS \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+   Everything that differs between projects lives here, keyed by the catalog
+   product's Project property (id 173) value. To add a new project: add an entry
+   here, plus its letterhead PNG in the repo root \u2014 nothing else in this file or
+   server.js needs to change. */
+const PROJECTS = {
+    'South Lofts': {
+        vendor: 'PCI Real Estate Developers LLC',
+        project: 'South Lofts by Premier Choice',
+        location: 'Plot 43, Saih Shuaib 2, Dubai',
+        building: 'South Lofts 1',
+        headerImage: 'bf_header.png',
+        fees: {
+            admin: 5250,          // AED flat
+            dldRate: 0.04,        // 4% of purchase price (shown separately, NOT added to total)
+            furnished: 25000,     // AED, shown when Furnished is turned on
+            privatePool: 100000   // AED, shown when Private Pool is turned on
+        },
+        catalogProps: {
+            type: 177,    // Unit Type
+            unitNo: 107,  // Unit No (property_107_text, e.g. "101")
+            sqft: 259,    // Total SqFt
+            floor: 261,   // Floor
+            planPrice: { '60_40': 263, '3_years': 265, '5_years': 267, 'full_payment': 269 }
+        },
+        completionDate: '2028-06-30', // fixed handover date used by 60_40 / 3_years / 5_years plans
+        schedules: SCHEDULES,
+        tnc: TNC,
+        bank: {
+            booking: {
+                bank: 'ENBD',
+                title: 'South Lofts by Premier Choice-Escrow Account',
+                acctNo: '0205959438202',
+                iban: 'AE740260000205959438202',
+                swift: 'EBILAEAD',
+                branch: 'NAD AL SHEEBA DUBAI'
+            },
+            dldAdmin: {
+                bank: 'ABU DHABI COMMERCIAL BANK',
+                title: 'PCI REAL ESTATE DEVELOPERS LLC',
+                iban: 'AE770030010031001994462',
+                swift: 'ADCBAEAA'
+            }
+        }
+    }
+
+    // Add new projects here once their details are confirmed, e.g.:
+    // 'Gateway': {
+    //     vendor: '...', project: '...', location: '...', building: '...',
+    //     headerImage: 'gateway_header.png',
+    //     fees: { admin: ..., dldRate: ..., furnished: ..., privatePool: ... },
+    //     catalogProps: { type: ..., unitNo: ..., sqft: ..., floor: ..., planPrice: {...} },
+    //     completionDate: '...', schedules: SCHEDULES /* or its own */, tnc: TNC /* or its own */,
+    //     bank: { booking: {...}, dldAdmin: {...} }
+    // }
+};
+
 /* ════════════════ VALIDATION FIELD LISTS ════════════════
    These mirror exactly what purchaserHtml()/companyHtml() print on the SPA/booking
    form. If any of these are blank, we refuse to render/attach and show why. */
@@ -320,6 +365,7 @@ const REQUIRED_COMPANY_FIELDS = [
 /* ════════════════ STATE ════════════════ */
 let currentDealId = null;
 let bookingNo = '';
+let currentProjectCfg = null;
 
 /* ════════════════ HELPERS ════════════════ */
 function callBX(method, params) {
@@ -520,7 +566,7 @@ BX24.init(function() {
    Runs BEFORE buildData()/renderForm(). If it returns any errors, the booking
    form is NOT generated — an error panel is shown instead and the Attach
    button stays disabled. */
-function validateBookingData(dealContactItems, contacts, productRows, product, pj, company) {
+function validateBookingData(dealContactItems, contacts, productRows, product, pj, company, projectKey) {
     const errors = [];
 
     // 1) Contacts — crm.deal.contact.items.get must have returned at least one
@@ -568,6 +614,8 @@ function validateBookingData(dealContactItems, contacts, productRows, product, p
         errors.push('No product row found on the deal (crm.deal.productrows.get returned no rows). Add the unit as a product on the deal.');
     } else if (!product) {
         errors.push('A product row exists (PRODUCT_ID ' + productRows[0].PRODUCT_ID + ') but its catalog details could not be loaded via catalog.product.get.');
+    } else if (projectKey && !PROJECTS[projectKey]) {
+        errors.push('This unit\'s Project (catalog property ' + PROJECT_PROPERTY_ID + ') is set to "' + projectKey + '", which is not yet configured in this app. Add "' + projectKey + '" to the PROJECTS config before generating this booking form.');
     }
 
     // 3) Payment-plan JSON field — must parse and must specify a paymentPlan.
@@ -628,6 +676,7 @@ async function loadAll() {
     let product = null;
     let unitImage = '';
     let productRows = [];
+    let projectKey = '';
     try {
         const rowsData = await callBX('crm.deal.productrows.get', { id: currentDealId });
         productRows = Array.isArray(rowsData) ? rowsData : (rowsData.result || []);
@@ -637,23 +686,28 @@ async function loadAll() {
             if (pid) {
                 const pd = await callBX('catalog.product.get', { id: pid });
                 product = (pd && pd.product) ? pd.product : pd;
+                projectKey = getProp(product, PROJECT_PROPERTY_ID) || DEFAULT_PROJECT_KEY;
                 console.log('[BookingForm] product', pid, product);
-                console.log('[BookingForm] Type/Area/Floor =',
-                    getProp(product, PROD_TYPE), '/', getProp(product, PROD_SQFT), '/', getProp(product, PROD_FLOOR));
+                console.log('[BookingForm] Project/Type/Area/Floor =', projectKey, '/',
+                    getProp(product, (PROJECTS[projectKey] || PROJECTS[DEFAULT_PROJECT_KEY]).catalogProps.type), '/',
+                    getProp(product, (PROJECTS[projectKey] || PROJECTS[DEFAULT_PROJECT_KEY]).catalogProps.sqft), '/',
+                    getProp(product, (PROJECTS[projectKey] || PROJECTS[DEFAULT_PROJECT_KEY]).catalogProps.floor));
                 unitImage = await loadUnitImage(pid, product);
             }
         }
     } catch (e) { console.warn('[BookingForm] product load failed (check catalog scope on this app):', e); }
 
     // 5) Validate BEFORE rendering — if anything required is missing, stop here.
-    const errors = validateBookingData(dealContactItems, contacts, productRows, product, pj, companyObj);
+    const errors = validateBookingData(dealContactItems, contacts, productRows, product, pj, companyObj, projectKey);
     if (errors.length) {
         showErrors(errors);
         return;
     }
 
     // 6) Assemble + render
-    const data = buildData(deal, pj, plan, contacts, product, company, unitImage);
+    const projectCfg = PROJECTS[projectKey] || PROJECTS[DEFAULT_PROJECT_KEY];
+    currentProjectCfg = projectCfg;
+    const data = buildData(deal, pj, plan, contacts, product, company, unitImage, projectCfg);
     renderForm(data);
     document.getElementById('attachBtn').disabled = false;
     setStatus('Ready — review, then Attach to Deal.');
@@ -812,9 +866,10 @@ function companyToObj(co) {
     };
 }
 
-function buildData(deal, pj, plan, contacts, product, company, unitImage) {
+function buildData(deal, pj, plan, contacts, product, company, unitImage, cfg) {
     const today = new Date();
     const discPct = toNumber(pj.discountPct);
+    const cp = cfg.catalogProps;
 
     const formDate = parseBXDate(getUF(deal, F_BOOKING_DATE))
 
@@ -824,7 +879,7 @@ function buildData(deal, pj, plan, contacts, product, company, unitImage) {
         // Fallback if the deal Amount hasn't been calculated yet
         let gross = 0;
         if (plan === 'custom') gross = toNumber(pj.totalAmount);
-        else if (product && PLAN_PRICE_PROP[plan]) gross = toNumber(getProp(product, PLAN_PRICE_PROP[plan]));
+        else if (product && cp.planPrice[plan]) gross = toNumber(getProp(product, cp.planPrice[plan]));
         netPayable = gross * (1 - discPct / 100);
     }
     // Back-compute the gross purchase price from net + discount
@@ -832,10 +887,10 @@ function buildData(deal, pj, plan, contacts, product, company, unitImage) {
         ? round2(netPayable / (1 - discPct / 100))
         : netPayable;
     const discValue = round2(purchasePrice - netPayable);
-    const dldFee = purchasePrice * DLD_RATE;
+    const dldFee = purchasePrice * cfg.fees.dldRate;
 
     // Schedule
-    const schedule = buildSchedule(plan, pj, today, netPayable);
+    const schedule = buildSchedule(plan, pj, today, netPayable, cfg);
 
     // Stable-per-deal booking number (looks like the template, no storage needed)
     const seed = parseInt(currentDealId, 10) || 1;
@@ -844,15 +899,18 @@ function buildData(deal, pj, plan, contacts, product, company, unitImage) {
     return {
         bookingNo: bookingNo,
         dateStr:  formDate ? fmtDate(formDate) : '',
-        unit: getPropText(product, PROD_UNITNO) || window._unitName || (product ? getProp(product, 'name') : ''),
-        type: product ? getProp(product, PROD_TYPE) : '',
-        totalArea: product ? getProp(product, PROD_SQFT) : '',
-        totalAreaSqM: product ? sqftToSqm(getProp(product, PROD_SQFT)) : '',
-        floor: product ? getProp(product, PROD_FLOOR) : '',
+        vendor: cfg.vendor, project: cfg.project, location: cfg.location, building: cfg.building,
+        headerImage: cfg.headerImage, bank: cfg.bank, tnc: cfg.tnc,
+        unit: getPropText(product, cp.unitNo) || window._unitName || (product ? getProp(product, 'name') : ''),
+        type: product ? getProp(product, cp.type) : '',
+        totalArea: product ? getProp(product, cp.sqft) : '',
+        totalAreaSqM: product ? sqftToSqm(getProp(product, cp.sqft)) : '',
+        floor: product ? getProp(product, cp.floor) : '',
         purchasePrice: purchasePrice,
         deposit: schedule.length ? schedule[0].amount : 0,
         discPct: discPct, discValue: discValue, netPayable: netPayable,
-        dldFee: dldFee, adminFee: ADMIN_FEE,
+        dldFee: dldFee, dldRatePct: round2(cfg.fees.dldRate * 100), adminFee: cfg.fees.admin,
+        furnishedFee: cfg.fees.furnished, privatePoolFee: cfg.fees.privatePool,
         furnished: (pj.furnished === 'Yes' || pj.furnished === true) ? 'Yes' : 'No',
         privatePool: (pj.privatePool === 'Yes' || pj.privatePool === true) ? 'Yes' : 'No',
         plan: plan, planLabel: PLAN_LABELS[plan] || plan || '\u2014',
@@ -873,15 +931,15 @@ function parseInstNo(label) {
     return m ? parseInt(m[1], 10) : null;
 }
 
-function baseSchedule(plan, pj, booking, netPayable) {
+function baseSchedule(plan, pj, booking, netPayable, cfg) {
     if (plan !== 'custom' && pj && pj.downpaymentStartDate) {
         const dps = new Date(pj.downpaymentStartDate);
         if (!isNaN(dps.getTime())) booking = dps;   // standard plans anchor to the chosen start date
     }
-    
 
-    const completion = (plan === '60_40' || plan === '5_years' || plan === '3_years')
-    ? new Date(2028, 5, 30) 
+
+    const completion = (plan === '60_40' || plan === '5_years' || plan === '3_years') && cfg.completionDate
+    ? parseBXDate(cfg.completionDate)
     : addMonths(booking, HANDOVER_MONTHS);
 
     function dateFor(when) {
@@ -890,8 +948,8 @@ function baseSchedule(plan, pj, booking, netPayable) {
         if (when.type === 'handover')   return addMonths(completion, when.months);
         return booking;
     }
-    if (SCHEDULES[plan]) {
-        return SCHEDULES[plan].map(function(it) {
+    if (cfg.schedules[plan]) {
+        return cfg.schedules[plan].map(function(it) {
             const isCompletion = it.when.type === 'completion';
             const d = dateFor(it.when);
             return { label: it.label, pct: it.pct,
@@ -1038,8 +1096,8 @@ function buildCustom02Schedule(pj, net) {
 /* Wrap the base schedule, apply balloons, then order rows by payment date
    (custom keeps its fixed phase order — Downpayment → During Construction →
    On Possession → Post Handover — since those dates are already in order). */
-function buildSchedule(plan, pj, booking, net) {
-    const rows = applyBalloons(baseSchedule(plan, pj, booking, net), pj, net);
+function buildSchedule(plan, pj, booking, net, cfg) {
+    const rows = applyBalloons(baseSchedule(plan, pj, booking, net, cfg), pj, net);
     if (plan === 'custom' || plan === 'custom-2') return rows;
     return rows
         .map(function(r, i) { r._i = i; return r; })
@@ -1254,13 +1312,13 @@ function scheduleHtml(d) {
     '<div class="sec-title">Installment Plan</div>' +
     '<div class="ip-summary">' +
         '<div class="row"><b>Net Payable Amount:</b> ' + money(d.netPayable) + '</div>' +
-        '<div class="row"><b>DLD Fee (4% of purchase price, payable separately):</b> ' + money(d.dldFee) + '</div>' +
+        '<div class="row"><b>DLD Fee (' + d.dldRatePct + '% of purchase price, payable separately):</b> ' + money(d.dldFee) + '</div>' +
         '<div class="row"><b>Admin Fee (payable separately):</b> ' + money(d.adminFee) + '</div>' +
         '<div class="row"><b>Furnished:</b> ' + (d.furnished === 'Yes'
-            ? 'Yes (' + money(FURNISHED_FEE) + ')'
+            ? 'Yes (' + money(d.furnishedFee) + ')'
             : 'No') + '</div>' +
         '<div class="row"><b>Private Pool:</b> ' + (d.privatePool === 'Yes'
-            ? 'Yes (' + money(PRIVATE_POOL_FEE) + ')'
+            ? 'Yes (' + money(d.privatePoolFee) + ')'
             : 'No') + '</div>' +
     '</div>' +
     '<table class="ip-table">' +
@@ -1269,9 +1327,9 @@ function scheduleHtml(d) {
     '</table>';
 }
 
-function tncHtml() {
+function tncHtml(d) {
     return '<div class="sec-title">Terms &amp; Conditions</div><ol class="tnc">' +
-        TNC.map(function(t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ol>';
+        d.tnc.map(function(t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ol>';
 }
 
 function unitLayoutHtml(d) {
@@ -1286,7 +1344,7 @@ function unitLayoutHtml(d) {
 
 function renderForm(d) {
     const html = '' +
-    '<div class="bf-header"><img src="/bf_header.png" alt="South Lofts"></div>' +
+    '<div class="bf-header"><img src="/' + esc(d.headerImage) + '" alt="' + esc(d.project) + '"></div>' +
     '<div class="bf-body">' +
 
       '<h1 class="bf-title">BOOKING FORM</h1>' +
@@ -1294,13 +1352,13 @@ function renderForm(d) {
       '<div class="bf-meta"><b>Date:</b> ' + esc(d.dateStr) + '</div>' +
 
       '<div class="prop-grid">' +
-        '<div class="row"><b>Vendor:</b> ' + esc(VENDOR) + '</div>' +
+        '<div class="row"><b>Vendor:</b> ' + esc(d.vendor) + '</div>' +
         '<div class="row"><b>Property Type:</b> ' + esc(val(d.type)) + '</div>' +
-        '<div class="row"><b>Project:</b> ' + esc(PROJECT) + '</div>' +
+        '<div class="row"><b>Project:</b> ' + esc(d.project) + '</div>' +
         '<div class="row"><b>Property Floor:</b> ' + esc(val(d.floor)) + '</div>' +
-        '<div class="row"><b>Location:</b> ' + esc(LOCATION) + '</div>' +
+        '<div class="row"><b>Location:</b> ' + esc(d.location) + '</div>' +
         '<div class="row"><b>Total Area:</b> ' + (d.totalAreaSqM ? (esc(d.totalAreaSqM) + ' Sq M') : '\u2014') + '</div>' +
-        '<div class="row"><b>Building / Phase:</b> ' + esc(BUILDING) + '</div>' +
+        '<div class="row"><b>Building / Phase:</b> ' + esc(d.building) + '</div>' +
         '<div class="row"><b>Purchase Price:</b> ' + money(d.netPayable) + '</div>' +
         '<div class="row"><b>Unit:</b> ' + esc(val(d.unit)) + '</div>' +
         '<div class="row"><b>First Instalment Payment (\u201CDeposit\u201D):</b> ' + money(d.deposit) + '</div>' +
@@ -1314,7 +1372,7 @@ function renderForm(d) {
       unitLayoutHtml(d) +
 
       '<div class="page-break"></div>' +
-      tncHtml() +
+      tncHtml(d) +
 
       '<div class="sec-title agents-title" style="margin-top:22px">Agents Information</div>' +
       '<div class="agents avoid-break">' +
@@ -1333,24 +1391,24 @@ function renderForm(d) {
       '<div class="sec-title">Bank Account Details</div>' +
       '<div class="bank-block avoid-break">' +
         '<div class="bank-sub">i. FOR BOOKING AND INSTALLMENT PAYMENTS</div>' +
-        '<div style="font-size:10.5px;margin-bottom:6px;">Booking payment and all subsequent installments shall be made in favor of the Vendor\u2019s account, PCI Real Estate Developers LLC:</div>' +
+        '<div style="font-size:10.5px;margin-bottom:6px;">Booking payment and all subsequent installments shall be made in favor of the Vendor\u2019s account, ' + esc(d.vendor) + ':</div>' +
         '<table class="bank">' +
-          '<tr><td>BANK:</td><td>ENBD</td></tr>' +
-          '<tr><td>ACCOUNT TITLE:</td><td>South Lofts by Premier Choice-Escrow Account</td></tr>' +
-          '<tr><td>ACCOUNT NO.:</td><td>0205959438202</td></tr>' +
-          '<tr><td>IBAN NO:</td><td>AE740260000205959438202</td></tr>' +
-          '<tr><td>SWIFT CODE:</td><td>EBILAEAD</td></tr>' +
-          '<tr><td>BRANCH:</td><td>NAD AL SHEEBA DUBAI</td></tr>' +
+          '<tr><td>BANK:</td><td>' + esc(d.bank.booking.bank) + '</td></tr>' +
+          '<tr><td>ACCOUNT TITLE:</td><td>' + esc(d.bank.booking.title) + '</td></tr>' +
+          '<tr><td>ACCOUNT NO.:</td><td>' + esc(d.bank.booking.acctNo) + '</td></tr>' +
+          '<tr><td>IBAN NO:</td><td>' + esc(d.bank.booking.iban) + '</td></tr>' +
+          '<tr><td>SWIFT CODE:</td><td>' + esc(d.bank.booking.swift) + '</td></tr>' +
+          '<tr><td>BRANCH:</td><td>' + esc(d.bank.booking.branch) + '</td></tr>' +
         '</table>' +
       '</div>' +
       '<div class="bank-block avoid-break">' +
-        '<div class="bank-sub">ii. FOR 4% DLD FEE AND ADMIN FEE</div>' +
-        '<div style="font-size:10.5px;margin-bottom:6px;">The 4% DLD fee and admin fee shall be made in favor of the Vendor\u2019s account, PCI Real Estate Developers LLC:</div>' +
+        '<div class="bank-sub">ii. FOR ' + d.dldRatePct + '% DLD FEE AND ADMIN FEE</div>' +
+        '<div style="font-size:10.5px;margin-bottom:6px;">The ' + d.dldRatePct + '% DLD fee and admin fee shall be made in favor of the Vendor\u2019s account, ' + esc(d.vendor) + ':</div>' +
         '<table class="bank">' +
-          '<tr><td>BANK:</td><td>ABU DHABI COMMERCIAL BANK</td></tr>' +
-          '<tr><td>ACCOUNT TITLE:</td><td>PCI REAL ESTATE DEVELOPERS LLC</td></tr>' +
-          '<tr><td>IBAN NO:</td><td>AE770030010031001994462</td></tr>' +
-          '<tr><td>SWIFT CODE:</td><td>ADCBAEAA</td></tr>' +
+          '<tr><td>BANK:</td><td>' + esc(d.bank.dldAdmin.bank) + '</td></tr>' +
+          '<tr><td>ACCOUNT TITLE:</td><td>' + esc(d.bank.dldAdmin.title) + '</td></tr>' +
+          '<tr><td>IBAN NO:</td><td>' + esc(d.bank.dldAdmin.iban) + '</td></tr>' +
+          '<tr><td>SWIFT CODE:</td><td>' + esc(d.bank.dldAdmin.swift) + '</td></tr>' +
         '</table>' +
       '</div>' +
 
@@ -1381,7 +1439,11 @@ async function attachToDeal() {
         const resp = await fetch('/render-pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ html: html })
+            body: JSON.stringify({
+                html: html,
+                headerImage: currentProjectCfg ? currentProjectCfg.headerImage : undefined,
+                projectLabel: currentProjectCfg ? currentProjectCfg.project : undefined
+            })
         });
         if (!resp.ok) {
             const msg = await resp.text().catch(function() { return ''; });
